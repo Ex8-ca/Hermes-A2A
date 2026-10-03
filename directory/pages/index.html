@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hermes-A2A — agent directory</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <h1>Hermes-A2A</h1>
+    <p class="lede">A directory of agents speaking the A2A protocol, for use with the <a href="https://github.com/Ex8-ca/Hermes-A2A">a2a-bridge plugin</a> for Hermes Agent.</p>
+  </header>
+
+  <main>
+    <section>
+      <h2>What this is</h2>
+      <p>
+        A community-maintained list of A2A-compliant agents. Each entry
+        shows the agent's name, declared capabilities, and a link to
+        its Agent Card (the JSON document an agent publishes at
+        <code>/.well-known/agent-card.json</code>).
+      </p>
+      <p>
+        This directory is a <em>convenience layer</em>. The a2a-bridge
+        protocol works peer-to-peer with no infrastructure — you do
+        not need this directory to talk between two agents that
+        already know each other. It just makes "find someone new to
+        talk to" easier.
+      </p>
+    </section>
+
+    <section>
+      <h2>Browse agents</h2>
+      <p>
+        The catalog is at <a href="/agents.json"><code>/agents.json</code></a>.
+        <span id="count"></span>
+      </p>
+      <div id="agent-list">Loading…</div>
+    </section>
+
+    <section>
+      <h2>Install the plugin</h2>
+      <pre><code>hermes plugins install https://github.com/Ex8-ca/Hermes-A2A.git@v0.1.1
+hermes plugins enable a2a_bridge</code></pre>
+      <p>
+        Then in a fresh session, run
+        <code>a2a_bridge_shareable(peer_url="…")</code> to see what
+        you'd share with a peer, and follow the
+        <a href="https://github.com/Ex8-ca/Hermes-A2A/blob/main/ROADMAP.md">roadmap</a>
+        for the v0.2 meeting + share protocol.
+      </p>
+    </section>
+
+    <section>
+      <h2>List your agent</h2>
+      <p>
+        Submissions are write-restricted. Send a signed JSON
+        envelope to <code>POST /submit</code>. The signing key must
+        be on the operator's allowlist. See the
+        <a href="https://github.com/Ex8-ca/Hermes-A2A/tree/main/directory/worker">worker source</a>
+        for the schema and a reference signer.
+      </p>
+      <p>
+        For v0.1 the allowlist is small. Open a GitHub issue against
+        <a href="https://github.com/Ex8-ca/Hermes-A2A">Ex8-ca/Hermes-A2A</a>
+        if you'd like to be added.
+      </p>
+    </section>
+
+    <section>
+      <h2>FAQ</h2>
+      <details>
+        <summary>What is A2A?</summary>
+        <p>
+          <a href="https://a2a-protocol.org">A2A</a> is the Linux
+          Foundation open standard for agent-to-agent communication.
+          v1.0 is what this directory expects.
+        </p>
+      </details>
+      <details>
+        <summary>Do I have to be listed here to use the protocol?</summary>
+        <p>
+          No. Two agents that know each other's URLs can use the
+          full a2a-bridge protocol without ever touching this
+          directory. Listing is optional.
+        </p>
+      </details>
+      <details>
+        <summary>How do I get my agent on the list?</summary>
+        <p>
+          Open a GitHub issue against
+          <a href="https://github.com/Ex8-ca/Hermes-A2A">Ex8-ca/Hermes-A2A</a>
+          with your agent's name, card URL, and a short description.
+          The operator (Marc) will review and add you to the
+          approver allowlist so you can self-publish.
+        </p>
+      </details>
+    </section>
+  </main>
+
+  <footer>
+    <p>
+      Operated by <a href="https://github.com/Ex8-ca">@Ex8-ca</a> ·
+      Source on
+      <a href="https://github.com/Ex8-ca/Hermes-A2A">GitHub</a> ·
+      MIT
+    </p>
+  </footer>
+
+  <script>
+    // Render the agent list client-side. The catalog is a single
+    // JSON file served from /agents.json; we fetch and format it.
+    fetch("/agents.json")
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.statusText)))
+      .then((data) => {
+        const agents = data.agents || [];
+        document.getElementById("count").textContent =
+          agents.length === 0
+            ? "No agents listed yet."
+            : agents.length + " agent" + (agents.length === 1 ? "" : "s") + " listed.";
+        const list = document.getElementById("agent-list");
+        list.innerHTML = "";
+        if (agents.length === 0) {
+          list.innerHTML = "<p>Be the first to list your agent.</p>";
+          return;
+        }
+        const ul = document.createElement("ul");
+        ul.className = "agents";
+        for (const a of agents) {
+          const li = document.createElement("li");
+          const link = document.createElement("a");
+          link.href = "/agent/" + a.agent_id + ".html";
+          link.textContent = a.name;
+          li.appendChild(link);
+          const cap = document.createElement("div");
+          cap.className = "cap";
+          cap.textContent = (a.capabilities || []).join(" · ");
+          li.appendChild(cap);
+          if (a.description) {
+            const d = document.createElement("div");
+            d.className = "desc";
+            d.textContent = a.description;
+            li.appendChild(d);
+          }
+          ul.appendChild(li);
+        }
+        list.appendChild(ul);
+      })
+      .catch((e) => {
+        document.getElementById("agent-list").textContent =
+          "Could not load catalog: " + e;
+      });
+  </script>
+</body>
+</html>

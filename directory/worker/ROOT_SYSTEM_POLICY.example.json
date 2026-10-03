@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "approvers": [
+    {
+      "name": "Marc Smith (operator)",
+      "public_key": "ed25519:REPLACE_ME_BASE64_ENCODED_32_BYTES"
+    }
+  ]
+}

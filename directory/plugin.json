@@ -1,0 +1,13 @@
+{
+  "name": "hermes-a2a-directory",
+  "version": "0.1.0",
+  "description": "Static site + Cloudflare Worker for the optional a2a-bridge agent directory at hermes-a2a.dpmob.com. Write-restricted: submissions are only accepted when signed by an approved approver key. See worker/README.md for the deployment instructions and ROOT_SYSTEM_POLICY for the public key allowlist.",
+  "author": {
+    "name": "Marc Smith",
+    "email": "marcs1@gmail.com",
+    "url": "https://github.com/Ex8-ca"
+  },
+  "homepage": "https://github.com/Ex8-ca/Hermes-A2A",
+  "repository": "https://github.com/Ex8-ca/Hermes-A2A",
+  "license": "MIT"
+}
