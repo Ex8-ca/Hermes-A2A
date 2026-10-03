@@ -1,0 +1,23 @@
+name: a2a-bridge
+version: 0.1.0
+description: >-
+  One-line inter-agent tasks over A2A. Wraps the bundled Hermes A2A platform
+  plugin's a2a_call / a2a_list / a2a_history with reply formatting, audit-log
+  lookup, and an approval gate before any task that looks like a memory share,
+  persona edit, or secret exchange. Ships with a TLS reference for putting
+  a peer agent on the public internet.
+author: NousResearch (community plugin)
+kind: standalone
+# Standalone because the plugin doesn't open a network server, doesn't
+# schedule cron jobs, and isn't a model provider — it just adds tools.
+# Loaded wherever the agent loop runs (CLI, TUI, desktop) when enabled.
+provides_tools:
+  - a2a_bridge_send
+  - a2a_bridge_confirm
+  - a2a_bridge_audit
+  - a2a_bridge_list_peers
+  - a2a_bridge_history
+requires_env: []
+optional_env: []
+# Use the same per-peer bearer tokens as the a2a platform plugin — no
+# additional secrets to manage.

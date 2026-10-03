@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+pip-wheel-metadata/
+
+# Tests / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Editor
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Repo-local: a downloaded copy of the bundled A2A plugin, kept here so
+# tests can run without depending on the user's live HERMES_HOME. NOT
+# shipped in the wheel.
+local_only/
+
+# Virtualenv
+.venv/
+venv/

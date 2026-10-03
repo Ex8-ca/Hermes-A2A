@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes-a2a-bridge"
+version = "0.1.0"
+description = "One-line inter-agent tasks over A2A — wraps the bundled Hermes A2A platform plugin's outbound tools with reply formatting, audit-log lookup, and an approval gate for sensitive tasks."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+  {name = "Marc Smith", email = "marcs1@gmail.com"},
+]
+keywords = ["hermes", "a2a", "agent-to-agent", "hermes-agent", "hermes-plugin", "llm", "protocol"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Framework :: Hermes Agent",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Typing :: Typed",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.0",
+  "pytest-asyncio>=0.21",
+  "ruff>=0.1.0",
+  "mypy>=1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Ex8-ca/Hermes-A2A"
+Issues = "https://github.com/Ex8-ca/Hermes-A2A/issues"
+Changelog = "https://github.com/Ex8-ca/Hermes-A2A/blob/main/CHANGELOG.md"
+
+[tool.setuptools]
+# The wheel ships a complete `plugins/a2a_bridge/` tree that mirrors the
+# runtime's `hermes-agent/plugins/a2a_bridge/` shape, so they can be copied
+# in place after `pip install` (or symlinked, see README).
+include-package-data = true
+
+[tool.setuptools.package-data]
+"plugins.a2a_bridge" = ["plugin.yaml", "README.md", "references/*.md"]
+"plugins.a2a_bridge.tests" = ["*.py"]
+"src" = ["hermes_a2a_bridge/py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["src/hermes_a2a_bridge/tests", "plugins/a2a_bridge/tests"]
+python_files = ["test_*.py", "*_test.py"]
+addopts = "-ra --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "ASYNC"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = false
+ignore_missing_imports = true
