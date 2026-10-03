@@ -33,3 +33,11 @@ local_only/
 # Virtualenv
 .venv/
 venv/
+
+# Wrangler (Cloudflare Workers dev tooling) — local cache + generated
+# config, both safe to ignore. Used by the directory/ Worker scaffold
+# (see directory/worker/README.md) and any other Wrangler-managed code
+# in the repo.
+.wrangler/
+wrangler.jsonc
+wrangler.toml.bak
