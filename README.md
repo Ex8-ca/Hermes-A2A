@@ -5,7 +5,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Version v0.1.0](https://img.shields.io/badge/version-v0.1.0-blue.svg)](https://github.com/Ex8-ca/Hermes-A2A/releases/tag/v0.1.0) [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](pyproject.toml)
 
-**Released 2026-10-03 · [CHANGELOG](CHANGELOG.md) · [Report an issue](https://github.com/Ex8-ca/Hermes-A2A/issues)**
+**Released 2026-10-03 · [CHANGELOG](CHANGELOG.md) · [Report an issue](https://github.com/Ex8-ca/Hermes-A2A/issues) · [Topics: `hermes-a2a`, `a2a`, `agent-to-agent`, `hermes-plugin`](https://github.com/Ex8-ca/Hermes-A2A)**
 
 **Install this version:**
 
