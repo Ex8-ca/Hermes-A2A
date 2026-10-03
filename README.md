@@ -27,6 +27,7 @@ Hermes-A2A is a plugin for [Hermes Agent](https://github.com/just-every/hermes-a
 | **Engine** | Wraps the bundled Hermes A2A platform plugin. No external runtime, no `npx`, no first-launch network fetch. Pure stdlib Python, in-process. |
 | **Required peer** | The bundled Hermes A2A platform plugin must be enabled: `hermes plugins enable a2a`. The bridge is a UX layer on top of it. |
 | **Required Python** | 3.10+ (tested on 3.10, 3.11, 3.12 in CI). |
+| **Auto-start at boot** | Optional. Run `./scripts/install-gateway-service.sh --start` after install to set up a systemd user service that starts `hermes gateway run` (and binds A2A) on every boot. See [Auto-start at boot](#auto-start-at-boot). |
 | **Platforms** | Linux, macOS, Windows — wherever Hermes Agent runs. No platform-specific code in this plugin. |
 | **Network** | None added by this plugin. All networking goes through the underlying A2A platform plugin (auth + redaction + rate limit already configured there). |
 | **Filesystem** | Read-only access to `~/.hermes/a2a_audit.jsonl` and `~/.hermes/a2a_conversations/<context_id>.jsonl` — files Hermes already manages. No writes outside the plugin's own directory. |
@@ -147,6 +148,40 @@ python -m venv .venv
 ```
 
 54 unit tests cover the approval classifier, the audit-log reader, and the tool handlers (with a stub PluginContext — no live Hermes required). The 9 live-peer integration tests are **skipped by default** unless `HERMES_A2A_TEST_TOKEN` is set; see `plugins/a2a_bridge/tests/integration_smoke.py` for details.
+
+## Auto-start at boot
+
+By default, the A2A platform only runs while you have an active session of `hermes` or `hermes gateway run` going. To make A2A serve on every boot — so a peer on another machine can reach your agent at 2am — install the bundled systemd user service:
+
+```bash
+cd /path/to/Hermes-A2A
+./scripts/install-gateway-service.sh --start
+```
+
+This:
+1. Writes `~/.config/systemd/user/hermes-a2a-gateway.service` running `hermes gateway run`
+2. Enables it (starts on next login/boot)
+3. Enables `loginctl enable-linger` for your user so the service survives logout
+4. Starts it now
+
+Verify it worked:
+
+```bash
+systemctl --user status hermes-a2a-gateway.service
+journalctl --user -u hermes-a2a-gateway.service -f
+```
+
+The service uses the **same Python interpreter the Hermes desktop uses** (under `~/.hermes/tools/python-3.14.7+202****0901-linux-x64/`) so it has the same deps (`ruamel.yaml`, `cryptography`, `httpx`, etc.) loaded. No virtualenv setup needed.
+
+To uninstall:
+
+```bash
+./scripts/install-gateway-service.sh --uninstall
+```
+
+> **Why a user service, not a system service?** A user service runs in your login session with your env (`HERMES_HOME`, the right Python, the right dotenv) and doesn't need root to install. That's the right scope for a per-user agent.
+
+> **Conflict with the desktop.** The Hermes desktop auto-spawns a `serve` process that does **not** load the A2A platform. If the desktop respawns `serve` after the systemd service starts `gateway run`, both will run, but only the systemd one binds port 9900. The two are designed to coexist; if you see them fighting, stop the desktop-spawned one with `systemctl --user stop hermes-desktop-backend` (or just close the desktop) — the systemd service will continue running.
 
 ## TLS for the public internet
 
