@@ -15,5 +15,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Audit-log reader and markdown-table formatter for `~/.hermes/a2a_audit.jsonl`.
 - Two-party memory-share protocol reference (`references/memory-share.md`).
 - TLS setup guide with Caddy + Let's Encrypt recipe (`references/tls-setup.md`).
-- 54 unit tests + 9 live-peer integration tests.
+- Agent Plugins v1 manifest at the repo root (`plugin.json`).
+  The actual tool registration is still driven by the in-process
+  `plugin.yaml` loader; the `plugin.json` makes the package discoverable
+  in catalogs.
+- 54 unit tests + 9 live-peer integration tests, all passing.
+  Integration tests are opt-in: skip when `HERMES_A2A_TEST_TOKEN` is unset.
 - GitHub Actions CI on Python 3.10, 3.11, 3.12.
