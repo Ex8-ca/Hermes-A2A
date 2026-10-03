@@ -25,7 +25,11 @@ classifiers = [
   "Topic :: Software Development :: Libraries :: Python Modules",
   "Typing :: Typed",
 ]
-dependencies = []
+dependencies = [
+    # Used by the public-marking allowlist (see plugins/a2a_bridge/policy.py).
+    # Pure-Python; the C-extension build is much faster but optional.
+    "PyYAML>=6.0",
+]
 
 [project.optional-dependencies]
 dev = [

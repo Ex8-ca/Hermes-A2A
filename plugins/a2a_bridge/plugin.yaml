@@ -17,6 +17,7 @@ provides_tools:
   - a2a_bridge_audit
   - a2a_bridge_list_peers
   - a2a_bridge_history
+  - a2a_bridge_shareable
 requires_env: []
 optional_env: []
 # Use the same per-peer bearer tokens as the a2a platform plugin — no

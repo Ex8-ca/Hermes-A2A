@@ -1,12 +1,22 @@
 """Tool implementations for a2a-bridge.
 
-Five tools:
+Five core tools (v0.1.x):
 
   a2a_bridge_send          — initiate a task. May return an approval request.
   a2a_bridge_confirm       — confirm (or cancel) a pending approval, then send.
   a2a_bridge_audit         — recent exchanges for a peer from the audit log.
   a2a_bridge_list_peers    — peers seen in the audit log (in addition to config).
   a2a_bridge_history       — recall a prior A2A conversation by context_id.
+
+Plus one v0.1.x dry-run helper:
+
+  a2a_bridge_shareable     — list every slice in the central allowlist
+                             and report whether each is shareable with a
+                             given peer (according to the frontmatter
+                             + policy-layer resolver). Read-only; no
+                             actual sharing. Full public-share tools
+                             (share_public, request_public) ship in v0.2
+                             (see ROADMAP.md).
 
 `a2a_bridge_send` and `a2a_bridge_confirm` delegate to the underlying
 Hermes A2A platform plugin's `a2a_call`. The platform plugin does the
@@ -23,7 +33,7 @@ import logging
 import time
 from typing import Any, Dict, List, Tuple
 
-from plugins.a2a_bridge import approval, audit
+from plugins.a2a_bridge import approval, audit, identity, policy  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +170,33 @@ SCHEMA_HISTORY: Dict[str, Any] = {
             },
         },
         "required": ["context_id"],
+    },
+}
+
+
+SCHEMA_SHAREABLE: Dict[str, Any] = {
+    "name": "a2a_bridge_shareable",
+    "description": (
+        "Dry-run: list every slice in the central allowlist at "
+        "~/.hermes/a2a_bridge/public.yaml and report whether each is "
+        "shareable with a given peer. Combines the data-side frontmatter "
+        "in the file with the policy-side allowlist (both must agree). "
+        "Read-only — does not send or share anything. The actual share / "
+        "request tools ship in v0.2 (see ROADMAP.md)."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "peer_url": {
+                "type": "string",
+                "description": (
+                    "Peer URL or agent_id to check against. The peer_id "
+                    "used for resolution is the SHA-256 fingerprint of the "
+                    "normalized URL (e.g. 'agent_8f3a7c2d9b1e4f5a')."
+                ),
+            },
+        },
+        "required": ["peer_url"],
     },
 }
 
@@ -341,6 +378,60 @@ def handle_history(args: Dict[str, Any], **_kw) -> str:
     return _call_a2a_history(context_id)
 
 
+def handle_shareable(args: Dict[str, Any], **_kw) -> str:
+    """Dry-run: report which slices are shareable with the given peer.
+
+    Resolves the peer via the identity primitive, loads the central
+    allowlist, and for every declared slice reports:
+      * the slice name
+      * its declared level (public_all / public_approved / deny)
+      * whether the data-side frontmatter agrees
+      * the final shareable-with-this-peer verdict
+    """
+    raw = (args.get("peer_url") or "").strip()
+    if not raw:
+        return "Error: 'peer_url' is required."
+    try:
+        # If the user passed an agent_id, we don't have a URL to normalize;
+        # we use the agent_id as-is for the policy resolver.
+        if raw.startswith("agent_"):
+            peer_id = raw
+        else:
+            peer_id = identity.agent_id_for(raw)
+    except ValueError as e:
+        return f"Error: invalid peer URL: {e}"
+
+    al = policy.load_allowlist()
+    if al.diagnostics:
+        diag = "\n".join(f"  - {d}" for d in al.diagnostics)
+        return f"Allowlist at {al.path} has diagnostics:\n{diag}"
+
+    if not al.slices:
+        return (
+            f"No slices declared in {al.path}. Add memory/skill entries "
+            f"under `slices.memories` and `slices.skills` to begin marking "
+            f"content as public. See ROADMAP.md for the format."
+        )
+
+    rows: List[Tuple[str, str, str, str, str]] = []
+    for slice_, fm, shareable, reason in policy.list_shareable(
+        al, peer_id=peer_id, memories=[], skills=[]
+    ):
+        fm_marker = "—" if fm is None else fm.source
+        fm_level = "—" if fm is None else fm.level.value
+        verdict = "✓ shareable" if shareable else "✗ blocked"
+        rows.append((slice_.name, slice_.kind, slice_.level.value, f"{fm_marker}/{fm_level}", f"{verdict}: {reason}"))
+
+    headers = ("slice", "kind", "level", "frontmatter", "verdict")
+    widths = [max(len(h), max((len(r[i]) for r in rows), default=0)) for i, h in enumerate(headers)]
+    def _fmt(row: Tuple[str, ...]) -> str:
+        return "  ".join(c.ljust(widths[i]) for i, c in enumerate(row))
+    lines = [_fmt(headers), "  ".join("-" * w for w in widths)]
+    for r in rows:
+        lines.append(_fmt(r))
+    return f"Shareable-with-{peer_id} (dry-run; no actual sharing):\n\n" + "\n".join(lines)
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────
@@ -365,6 +456,7 @@ A2A_BRIDGE_TOOLS: Tuple[Tuple[str, Dict[str, Any], Any], ...] = (
     ("a2a_bridge_audit",      SCHEMA_AUDIT,      handle_audit),
     ("a2a_bridge_list_peers", SCHEMA_LIST_PEERS, handle_list_peers),
     ("a2a_bridge_history",    SCHEMA_HISTORY,    handle_history),
+    ("a2a_bridge_shareable",  SCHEMA_SHAREABLE,  handle_shareable),
 )
 
 

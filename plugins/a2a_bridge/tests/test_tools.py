@@ -159,13 +159,14 @@ class TestRegistration:
         from plugins.a2a_bridge import register as _register
         _register(ctx)
         assert bridge._PLUGIN_CTX is ctx
-        # All five tools registered.
+        # All six tools registered.
         for name in (
             "a2a_bridge_send",
             "a2a_bridge_confirm",
             "a2a_bridge_audit",
             "a2a_bridge_list_peers",
             "a2a_bridge_history",
+            "a2a_bridge_shareable",
         ):
             assert name in ctx.tools
             assert callable(ctx.tools[name])
