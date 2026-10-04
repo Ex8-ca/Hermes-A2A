@@ -3,6 +3,46 @@
 All notable changes to Hermes-A2A are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.2] — 2026-10-04
+
+### Added — Directory per-tailnet discovery (v0.5 first slice)
+
+The `/list` endpoint gains two new orthogonal query parameters for
+cross-tailnet discovery:
+
+- **`?tailnet=<name>`** — case-insensitive match against the tailnet
+  suffix in `entry.agent_card_url`'s host. For a host like
+  `ai5080.taila6e2e.ts.net`, the tailnet is `taila6e2e`. Substring
+  match if the param starts with `.` (e.g. `?tailnet=.ts.net` matches
+  every MagicDNS entry across all tailnets). Exact match otherwise.
+  LAN / public hosts return no match (no tailnet to match against).
+
+- **`?reachable_via=<value>`** — alias for `?transport=`, named from
+  the discoverer's perspective. Same semantics. If both are present,
+  `?transport=` wins.
+
+Both filters compose with `?transport=`. The response shape gains
+a `filters` field echoing the active params for debugging.
+
+This is the first slice of v0.5: anyone on any tailnet can now
+filter the public directory to "show me only entries on tailnet
+X". The directory itself remains Cloudflare-hosted at `hermes-a2a.dpmob.com`
+and unchanged for cross-tailnet visibility — entries from any
+tailnet are visible to anyone. The transport field tells the
+discoverer what network they'd need to be on to actually reach
+the agent.
+
+**Follow-up slices (planned for v0.5.3+):**
+
+- v0.5.3 — Tailscale Funnel mirror of the directory at
+  `dir.taila6e2e.ts.net` (same KV, second front-door on `.2`,
+  reachable from inside the tailnet for faster discovery).
+- v0.5.4 — Submitter-side smoke check (HEAD probe of `agent_card_url`
+  from the directory edge, recording `lastseen` on each entry).
+
+**Tests:** 7 new in `directory/tests/list.test.js`. Directory Node
+test count: 55 → **62**.
+
 ## [0.4.3] — 2026-10-04
 
 ### Added — Peer-unreachable error UX

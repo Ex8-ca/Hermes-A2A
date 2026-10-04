@@ -122,6 +122,29 @@ Two JSON endpoints serve the catalog:
   `tailscale-magicdns`, `lan`, `https`, `http-public`. Absent
   param = return all entries (the prior contract).
 
+  Optional query parameter (v0.5.2): **`?tailnet=<name>`** filters
+  to entries whose MagicDNS host belongs to the named tailnet
+  (case-insensitive exact match against the second-to-last label of
+  the `*.ts.net` host). Substring match if the param starts with `.`
+  (e.g. `?tailnet=.ts.net` matches every MagicDNS entry across all
+  tailnets). Non-MagicDNS entries don't match.
+
+  Optional query parameter (v0.5.2): **`?reachable_via=<value>`** is
+  an alias for `?transport=`, named from the discoverer's perspective.
+  If both are set, `?transport=` wins.
+
+  All three filters compose. The response includes a `filters` object
+  echoing the active params:
+
+  ```json
+  {
+    "version": 1,
+    "count": 3,
+    "agents": [...],
+    "filters": { "transport": null, "tailnet": "taila6e2e" }
+  }
+  ```
+
 ### 3. Per-agent pages
 
 `/agent/<agent_id>.html` — one static HTML file per agent,

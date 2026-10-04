@@ -190,31 +190,72 @@ def main() -> int:
         data = json.loads(_http_get(DIRECTORY_LIST))
         count = data.get("count", 0)
         agents = [a.get("agent_id") for a in data.get("agents", [])]
-        if count != 2 or "desktop_2" not in agents or "ai5080" not in agents:
-            return False, f"expected 2 entries (desktop_2, ai5080), got count={count} agents={agents}"
-        # v0.4.1: each entry should have a transport field. Both live
-        # entries are on MagicDNS URLs so both should be "tailscale-magicdns".
+        # We require the two canonical live entries. The e2e test itself
+        # adds a third entry (`agent_3to2_00000001` or similar) via the
+        # LAN round-trip submission, so we don't pin to count==2 here.
+        for required in ("desktop_2", "ai5080"):
+            if required not in agents:
+                return False, f"missing required entry {required}, got agents={agents}"
+        # All entries should have a transport field. The two canonical
+        # live entries should both be tailscale-magicdns.
         transports = {a["agent_id"]: a.get("transport") for a in data["agents"]}
-        if not all(t == "tailscale-magicdns" for t in transports.values()):
-            return False, f"transport field missing or wrong: {transports}"
-        return True, f"count={count}, agents={agents}, transports={set(transports.values())}"
+        for eid in ("desktop_2", "ai5080"):
+            if transports.get(eid) != "tailscale-magicdns":
+                return False, f"{eid} transport != tailscale-magicdns: {transports.get(eid)}"
+        return True, f"count={count} (>=2), canonical entries present, transports ok"
 
     if not check("5. directory /list has 2 clean entries with transport", check_directory_list):
         failures += 1
 
     # 5b. directory /list?transport=tailscale-magicdns (v0.4.1 filter)
     def check_directory_filter() -> tuple[bool, str]:
+        # Both MagicDNS live entries should match. The e2e test's LAN
+        # entry (192.168.1.x) won't match.
         data = json.loads(_http_get(DIRECTORY_LIST + "?transport=tailscale-magicdns"))
         count = data.get("count", 0)
-        if count != 2:
-            return False, f"expected 2 entries, got count={count}"
+        if count < 2:
+            return False, f"expected >=2 tailscale-magicdns entries, got count={count}"
+        agents_ts = {a["agent_id"] for a in data["agents"]}
+        for required in ("desktop_2", "ai5080"):
+            if required not in agents_ts:
+                return False, f"{required} missing from tailscale-magicdns filter"
+
         # And the inverse: ?transport=https should be 0 (no public-HTTPS entries)
         data_https = json.loads(_http_get(DIRECTORY_LIST + "?transport=https"))
         if data_https.get("count", -1) != 0:
             return False, f"?transport=https should be 0, got {data_https.get('count')}"
-        return True, f"?transport=tailscale-magicdns={count}, ?transport=https=0"
 
-    if not check("5b. directory /list?transport= filter (v0.4.1)", check_directory_filter):
+        # The e2e test's LAN entry should match ?transport=lan
+        data_lan = json.loads(_http_get(DIRECTORY_LIST + "?transport=lan"))
+        if data_lan.get("count", -1) < 1:
+            return False, f"?transport=lan should be >=1, got {data_lan.get('count')}"
+
+        # v0.5.2: ?tailnet=taila6e2e should match both MagicDNS entries
+        data_tailnet = json.loads(_http_get(DIRECTORY_LIST + "?tailnet=taila6e2e"))
+        if data_tailnet.get("count", -1) < 2:
+            return False, f"?tailnet=taila6e2e should be >=2, got {data_tailnet.get('count')}"
+        # The response shape should echo the active filter.
+        if data_tailnet.get("filters", {}).get("tailnet") != "taila6e2e":
+            return False, f"?tailnet= response missing filters.tailnet echo: {data_tailnet.get('filters')}"
+
+        # v0.5.2: ?tailnet=.ts.net is a substring match across MagicDNS entries
+        data_any_tailnet = json.loads(_http_get(DIRECTORY_LIST + "?tailnet=.ts.net"))
+        if data_any_tailnet.get("count", -1) < 2:
+            return False, f"?tailnet=.ts.net should be >=2, got {data_any_tailnet.get('count')}"
+
+        # ?tailnet=nosuch (substring not present) should be 0
+        data_none = json.loads(_http_get(DIRECTORY_LIST + "?tailnet=nosuch"))
+        if data_none.get("count", -1) != 0:
+            return False, f"?tailnet=nosuch should be 0, got {data_none.get('count')}"
+
+        # v0.5.2: ?reachable_via=lan is an alias for ?transport=lan (>=1 here)
+        data_rv = json.loads(_http_get(DIRECTORY_LIST + "?reachable_via=lan"))
+        if data_rv.get("count", -1) < 1:
+            return False, f"?reachable_via=lan should be >=1, got {data_rv.get('count')}"
+
+        return True, "filter matrix all match"
+
+    if not check("5b. directory /list filter matrix (v0.4.1 + v0.5.2)", check_directory_filter):
         failures += 1
 
     # 6. per-agent SSR pages (also checks for the transport chip — v0.4.1)

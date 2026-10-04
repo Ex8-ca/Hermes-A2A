@@ -109,3 +109,128 @@ test("/list?transport=… is case-insensitive", async () => {
   assert.equal(mixedBody.count, 1);
   assert.equal(mixedBody.agents[0].agent_id, "pub_1");
 });
+
+// --- v0.5.2: ?tailnet= filter ---
+
+const MULTI_TAILNET_FIXTURES = [
+  {
+    agent_id: "tail_a",
+    name: "Tail A",
+    agent_card_url: "http://minisforum-desktop.taila6e2e.ts.net:9900/card.json",
+    transport: "tailscale-magicdns",
+  },
+  {
+    agent_id: "tail_b",
+    name: "Tail B",
+    agent_card_url: "http://someone.tailnetXYZ.ts.net:9900/card.json",
+    transport: "tailscale-magicdns",
+  },
+  {
+    agent_id: "lan_x",
+    name: "LAN X",
+    agent_card_url: "http://192.168.1.5:9900/card.json",
+    transport: "lan",
+  },
+  {
+    agent_id: "pub_y",
+    name: "Pub Y",
+    agent_card_url: "https://example.com/card.json",
+    transport: "https",
+  },
+];
+
+test("/list?tailnet=… filters to entries on the named Tailscale tailnet", async () => {
+  const env = makeMockEnv(MULTI_TAILNET_FIXTURES);
+  const resp = await onRequestGet({
+    request: makeRequest("https://hermes-a2a.dpmob.com/list?tailnet=taila6e2e"),
+    env,
+  });
+  const body = await resp.json();
+  assert.equal(body.count, 1);
+  assert.equal(body.agents[0].agent_id, "tail_a");
+  // The response also echoes the active filters.
+  assert.equal(body.filters.tailnet, "taila6e2e");
+});
+
+test("/list?tailnet= is case-insensitive", async () => {
+  const env = makeMockEnv(MULTI_TAILNET_FIXTURES);
+  const resp = await onRequestGet({
+    request: makeRequest("https://hermes-a2a.dpmob.com/list?tailnet=TAILNETxyz"),
+    env,
+  });
+  const body = await resp.json();
+  assert.equal(body.count, 1);
+  assert.equal(body.agents[0].agent_id, "tail_b");
+});
+
+test("/list?tailnet=.ts.net is a substring match across all MagicDNS entries", async () => {
+  // The dot prefix signals substring match. .ts.net is present in every
+  // MagicDNS host, so this should return both tail_a and tail_b but not
+  // the LAN or public entries.
+  const env = makeMockEnv(MULTI_TAILNET_FIXTURES);
+  const resp = await onRequestGet({
+    request: makeRequest("https://hermes-a2a.dpmob.com/list?tailnet=.ts.net"),
+    env,
+  });
+  const body = await resp.json();
+  assert.equal(body.count, 2);
+  const ids = body.agents.map((a) => a.agent_id).sort();
+  assert.deepEqual(ids, ["tail_a", "tail_b"]);
+});
+
+test("/list?tailnet=… excludes non-MagicDNS entries", async () => {
+  // LAN entries don't have a ts.net host, so they're filtered out
+  // even though 192.168.1.5 contains '5'.
+  const env = makeMockEnv(MULTI_TAILNET_FIXTURES);
+  const resp = await onRequestGet({
+    request: makeRequest("https://hermes-a2a.dpmob.com/list?tailnet=192"),
+    env,
+  });
+  const body = await resp.json();
+  assert.equal(body.count, 0);
+});
+
+// --- v0.5.2: ?reachable_via= alias for ?transport= ---
+
+test("/list?reachable_via=… is an alias for ?transport= (exact same effect)", async () => {
+  const env = makeMockEnv(FIXTURES);
+  const resp = await onRequestGet({
+    request: makeRequest("https://hermes-a2a.dpmob.com/list?reachable_via=lan"),
+    env,
+  });
+  const body = await resp.json();
+  assert.equal(body.count, 1);
+  assert.equal(body.agents[0].agent_id, "lan_1");
+});
+
+test("/list?transport= takes precedence over ?reachable_via= when both are set", async () => {
+  // If both are set, transport wins. This avoids the discoverer being
+  // confused by which param was applied.
+  const env = makeMockEnv(FIXTURES);
+  const resp = await onRequestGet({
+    request: makeRequest("https://hermes-a2a.dpmob.com/list?transport=lan&reachable_via=https"),
+    env,
+  });
+  const body = await resp.json();
+  assert.equal(body.count, 1);
+  assert.equal(body.agents[0].agent_id, "lan_1");
+  // body.filters echoes the active one.
+  assert.equal(body.filters.transport, "lan");
+});
+
+// --- v0.5.2: combined filters ---
+
+test("/list?tailnet=…&transport=… combines both filters", async () => {
+  // Only tailnet=taila6e2e AND transport=tailscale-magicdns matches both
+  // criteria. tail_a has both; tail_b has wrong tailnet.
+  const env = makeMockEnv(MULTI_TAILNET_FIXTURES);
+  const resp = await onRequestGet({
+    request: makeRequest("https://hermes-a2a.dpmob.com/list?tailnet=taila6e2e&transport=tailscale-magicdns"),
+    env,
+  });
+  const body = await resp.json();
+  assert.equal(body.count, 1);
+  assert.equal(body.agents[0].agent_id, "tail_a");
+  assert.equal(body.filters.transport, "tailscale-magicdns");
+  assert.equal(body.filters.tailnet, "taila6e2e");
+});

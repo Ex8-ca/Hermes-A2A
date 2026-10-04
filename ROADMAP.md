@@ -498,9 +498,9 @@ The directory currently has one root, one KV namespace, and one `ROOT_SYSTEM_POL
 |---|---|---|
 | Plugin unit | 189 | unchanged from v0.3.0 (the "201" in v0.3.0 release notes was a release-quote that didn't match the actual collection; v0.3.4's `pythonpath = ["."]` fix didn't change the count) |
 | Plugin e2e | 1 (skipped) | unchanged |
-| Directory (Node) | 55 | was 43; +12 from v0.4.1: 5 `classifyTransport`, 2 submit transport, 3 list filter, 1 render-agents chip, 1 existing test update |
+| Directory (Node) | 62 | was 43 in v0.4.0; +19 from v0.4.1 (5 classifyTransport, 2 submit transport, 3 list filter) and v0.5.2 (4 tailnet + 1 reachable_via + 1 precedence + 1 combined -1 dedup = +7, +1 render-agents chip). |
 | Directory (Python) | 25 | was 12; +13 from v0.4.0 (12 `test_discover_tailscale.py` + 1 `test_make_submission_tailscale.py`). The 12 `policy_rotate.py` tests are at `directory/tests/test_policy_rotate.py` and run with the Node tests in CI. |
-| **Total** | **279** | (198 + 1 + 55 + 25) |
+| **Total** | **286** | (198 + 1 + 62 + 25) |
 
 ## What this document is NOT
 
