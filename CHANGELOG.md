@@ -3,6 +3,31 @@
 All notable changes to Hermes-A2A are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased] — README + third-party demo
+
+### Added
+
+- **`scripts/discovery_client_demo.py`** — a public-network
+  third-party client demo. Hits `hermes-a2a.dpmob.com`, lists the
+  catalog, applies tailnet/transport filters, fetches the per-agent
+  SSR page, and demonstrates the v0.4.3 contextual error when a
+  caller hits a MagicDNS agent from a non-tailnet host. Runnable
+  with no Hermes / Tailscale configuration; pure stdlib. Exit
+  code 0 on success. This is the third-party integration test
+  for v0.4.3 + v0.5.2.
+
+- **README refresh for v0.5.2** — the on-repo README was pinned
+  at v0.1.0 and didn't reflect v0.2.0-v0.5.x. Rewritten to current
+  version with:
+  - Live "what's new" table back to v0.2.0
+  - Three install paths (plugin install / pip / manual drop-in)
+  - Directory section: endpoints, filter examples, transport / tailnet
+    semantics, third-party discoverer walkthrough
+  - Peer-unreachable error UX section (v0.4.3)
+  - Tailscale Funnel listed as a TLS option
+  - Updated test counts (286)
+  - Full project layout tree (was 12 files, now 50+)
+
 ## [0.5.2] — 2026-10-04
 
 ### Added — Directory per-tailnet discovery (v0.5 first slice)
