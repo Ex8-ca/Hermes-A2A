@@ -3,6 +3,75 @@
 All notable changes to Hermes-A2A are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] — 2026-10-04
+
+### Added — Plugin
+
+- **Replay protection on signed envelopes** — `parse_incoming`
+  and `parse_envelope` now check `sent_at` against the receiver's
+  clock and refuse any envelope older than `max_age_seconds` (default
+  300s) or more than `max_age_seconds` in the future. The window
+  bounds the blast radius of a captured envelope. The check is
+  applied to both `introduce`/`introduce_ack` envelopes and
+  `memory_slice` envelopes. Operators can extend the window via
+  `max_age_seconds=…` for slow networks. `handshake.check_replay_window`
+  is a public helper; `handshake.MAX_ENVELOPE_AGE` is the default.
+  Replay-window tests cover stale, future-dated, and within-window
+  scenarios for both envelope types.
+- **Real slice fetching** — `handle_share_public` now reads the
+  slice from disk via the new `slice.fetch_contents(slice_, home=…)`
+  function instead of sending a placeholder. The function splits
+  the source file (relative to `HERMES_HOME`) into `{heading, body}`
+  sections at markdown `^#+\s+…` boundaries. If
+  `slice_.heading_anchor` is set, only the matching section is
+  sent. Path-traversal is refused via the same `is_relative_to`
+  guard used for `write_to`. Empty sections (anchor matched
+  nothing) are also refused. The receiver sees the same bytes
+  the sender had at send time.
+- **Cross-check between envelope and meeting record** — both
+  `handle_introduce_respond` and `handle_receive_public` now
+  refuse envelopes whose `from_public_key` differs from the
+  `peer_public_key` stored in the meeting record. Defense in
+  depth against a future bug in the agentId/key fingerprint check
+  or a key-collision attack. The check only fires when a meeting
+  record already exists; new meetings still flow through
+  `parse_incoming`'s own fingerprint check.
+
+### Added — Directory
+
+- **Operator-rotation CLI** — `directory/operator/policy_rotate.py`.
+  Adds and removes approvers from the central
+  `ROOT_SYSTEM_POLICY` JSON that the directory's `submit.js`
+  reads. Refuses to remove the last approver (would lock the
+  directory out — `submit.js` fails closed). Writes mode-0600
+  policy and audit files. Audit log captures who was added or
+  removed and when. The CLI does not call the Cloudflare API;
+  the operator pastes the resulting JSON into
+  `wrangler pages secret put ROOT_SYSTEM_POLICY`.
+
+### Fixed
+
+- `handle_introduce_respond` now passes `sent_at` through to
+  `parse_incoming` so the replay-window check can fire on
+  user-approved consent responses.
+- `handle_introduce_respond` no longer loads the meeting store
+  twice (was loading once for the new meeting and once for the
+  upsert — kept only the upsert path).
+
+### Tests
+
+- 13 new tests across 4 new test classes:
+  - `TestReplayWindow` in test_handshake.py (4 tests)
+  - `TestReplayWindow` in test_slice.py (4 tests)
+  - `TestFetchContents` in test_slice.py (5 tests, including
+    a fetch→envelope→parse round-trip and the path-traversal guard)
+  - `TestV02SecurityGates` in test_tools.py grew with 2 new
+    cross-check tests (matching-key acceptance + key-substitution
+    refusal)
+  - `test_policy_rotate.py` is a new test file with 12 tests
+    covering add / remove / list / duplicate / last-approver
+    / audit-log / file-mode invariants.
+
 ## [0.2.0] — 2026-10-04
 
 ### Added

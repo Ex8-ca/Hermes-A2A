@@ -357,6 +357,45 @@ mv directory/wrangler.jsonc.bak directory/wrangler.jsonc 2>/dev/null
 KV binding and the project name; **do not edit the KV namespace
 id** (`3d287cdf01174d46ae58124a502652f3`).
 
+## Rotating the operator allowlist
+
+The directory's `ROOT_SYSTEM_POLICY` is a JSON-string env var
+(Cloudflare Pages doesn't accept JSON objects directly) listing
+the operator public keys that may approve submissions. To add or
+remove an approver without redeploying the Pages project, use
+the policy-rotation CLI:
+
+```bash
+# Show current approvers
+python3 directory/operator/policy_rotate.py --list
+
+# Add a new approver (the 32-byte ed25519 public key, base64)
+python3 directory/operator/policy_rotate.py \
+    --add alice ed25519:hNcEUzReTvcefu97VIa093O4orcNaG27dXfNJybSECY=
+
+# Remove an approver (refused if it would empty the list)
+python3 directory/operator/policy_rotate.py --remove alice
+```
+
+The CLI writes to `~/.hermes/directory.policy.json` (mode 0600)
+and appends each change to
+`~/.hermes/directory.policy.audit.log` (mode 0600). To push the
+new policy to the live directory, copy the policy file's contents
+into the Cloudflare dashboard:
+
+```bash
+cat ~/.hermes/directory.policy.json | pbcopy   # or xclip, etc.
+# then in dash.cloudflare.com → Workers & Pages →
+#   hermes-a2a-directory → Settings → Environment variables →
+#   edit ROOT_SYSTEM_POLICY → paste → save
+```
+
+The CLI does **not** call the Cloudflare API itself — operators
+copy/paste or wire `wrangler pages secret put ROOT_SYSTEM_POLICY`
+into their deploy script. The fail-closed invariant: an empty
+allowlist would lock the directory out (submit.js refuses every
+submission); the CLI refuses to create that state.
+
 ## Layout
 
 ```
@@ -382,7 +421,8 @@ directory/
 │       ├── _template.html        — source of truth for per-agent pages
 │       └── agent_<id>.html       — pre-rendered profiles (generated)
 └── operator/
-    └── make_submission.py        — reference signer for POST /submit
+    ├── make_submission.py        — reference signer for POST /submit
+    └── policy_rotate.py          — manage ROOT_SYSTEM_POLICY approvers
 ```
 
 ## Cost

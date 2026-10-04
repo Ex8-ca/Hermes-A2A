@@ -415,13 +415,14 @@ That's two scopes. Recommendation: ship v0.3.0-plugin (items 1-3
 above) and v0.3.0-directory (item 4) as separate tags so each is
 independently roll-back-able.
 
-## Test counts at v0.2.0
+## Test counts at v0.3.0
 
 | Suite | Tests | Notes |
 |---|---|---|
-| Plugin unit | 171 | +4 security regressions from the v0.2 port |
+| Plugin unit | 201 | +17 from v0.2.0 (replay window + cross-check + fetch + round-trip) |
 | Plugin e2e | 1 (skipped) | `tests/e2e_demo.py` mutates live state; not in CI |
-| Directory (Node) | 35 | covers 4 directory v2 cycles |
+| Directory (Node) | 35 | unchanged from v0.2.0 |
+| Directory (Python) | 12 | new `test_policy_rotate.py` covers the operator-rotation CLI |
 
 ## What this document is NOT
 
