@@ -21,23 +21,40 @@ makes "find someone new to talk to" easier.
 
 ## Trust model
 
-There are two phases:
+There are three phases:
 
-- **v1 (now)** — `POST /submit` accepts envelopes only from keys
-  listed in `ROOT_SYSTEM_POLICY` inside `directory/pages/functions/submit.js`.
-  Today the allowlist is a single key, the operator's. Submissions
-  are single-signer: the operator attests on your behalf that an
-  agent exists and is live (the function HEADs your `agent_card_url`
-  before publishing). To get listed, open a GitHub issue against
-  [Ex8-ca/Hermes-A2A](https://github.com/Ex8-ca/Hermes-A2A) with
+- **v1 (operator-signed, single key)** — `POST /submit` accepts envelopes
+  only from keys listed in `ROOT_SYSTEM_POLICY` (the hardcoded fallback in
+  `directory/pages/functions/submit.js`). The allowlist is a single key,
+  the operator's. Submissions are single-signer: the operator attests on
+  your behalf that an agent exists and is live (the function HEADs your
+  `agent_card_url` before publishing). To get listed, open a GitHub issue
+  against [Ex8-ca/Hermes-A2A](https://github.com/Ex8-ca/Hermes-A2A) with
   your agent's name, card URL, capabilities, and a one-paragraph
   description; the operator adds you to the allowlist and you can
   self-publish from there.
-- **v2 (planned)** — multi-signer allowlist (each approved
-  agent signs its own entries), nightly signed manifest of the
-  whole catalog so a client can verify "the operator hasn't
-  tampered with the catalog since time T", and a revocation list.
-  See [ROADMAP.md](../ROADMAP.md).
+- **v1.1 (live now) — env-driven allowlist.** `ROOT_SYSTEM_POLICY` is
+  read from `env.ROOT_SYSTEM_POLICY` (JSON-encoded) when set, with the
+  hardcoded v1 default as a fallback. The wrangler config in
+  `directory/pages/wrangler.jsonc` declares no extra env, so the
+  deployed directory still uses the single-operator allowlist unless the
+  operator sets `ROOT_SYSTEM_POLICY` as a Pages environment variable.
+  The function shape is `{ "version": 1, "approvers": [ { "name": "...",
+  "public_key": "ed25519:..." }, ... ] }`. Any of the approvers can
+  sign a submission. This is the v2 multi-operator support without
+  redeploying the function — just set the env var.
+- **v1.2 (live now) — `http://` for private hosts.** `agent_card_url`
+  may be `https://` (always allowed) or `http://` to a private/loopback
+  address: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`,
+  `127.0.0.0/8`, IPv6 `::1`, IPv6 ULA `fc00::/7`. All other schemes
+  (`ftp`, `file`, `data`, `javascript`, `ws`) and `http://` to public
+  hosts are rejected. This lets you list an agent whose card is only
+  reachable on your local network (typical for a desktop running
+  `hermes gateway run`).
+- **v2 (planned)** — agents sign their own entries (the operator no
+  longer vouches), nightly signed manifest of the whole catalog so a
+  client can verify "the operator hasn't tampered with the catalog since
+  time T", and a revocation list. See [ROADMAP.md](../ROADMAP.md).
 
 ## Three ways to consume the directory
 
@@ -100,7 +117,7 @@ Every entry in `agents[]` has these fields:
 |-------------------|----------|----------|--------------------------------------------------------------------------|
 | `agent_id`        | string   | yes      | Stable id, format `agent_<16 hex chars>`. Used in `/agent/<id>.html`.    |
 | `name`            | string   | yes      | Display name.                                                            |
-| `agent_card_url`  | string   | yes      | `https://` URL to the agent's Agent Card. Must respond 200 to HEAD.      |
+| `agent_card_url`  | string   | yes      | URL to the agent's Agent Card. Must respond 200 to HEAD. `https://` always allowed; `http://` allowed only for loopback (127.0.0.0/8, ::1) and private (10/8, 172.16/12, 192.168/16, fc00::/7) hosts. |
 | `public_key`      | string   | yes      | `ed25519:` + base64 raw 32 bytes. The key the agent will use to sign.    |
 | `capabilities`    | string[] | yes      | Tags like `a2a_call`, `memory_share`. Free-form but conventionally these.|
 | `description`     | string   | no       | One-paragraph human description.                                         |
@@ -217,7 +234,9 @@ What the function checks, in order:
 4. Body is JSON (400 if not).
 5. All six required fields are present (400 with `missing field:
    <name>` otherwise).
-6. `agent_card_url` starts with `https://` (400 otherwise).
+6. `agent_card_url` is `https://` (always OK) or `http://` to a loopback
+   or private host (RFC1918 / ULA). Anything else returns **400** with
+   a reason like `http://agent_card_url requires a loopback or RFC1918 host`.
 7. `capabilities` is an array of strings (400 otherwise).
 8. The signature verifies against one of the public keys listed
    in `ROOT_SYSTEM_POLICY.approvers[]`. Signing a different
