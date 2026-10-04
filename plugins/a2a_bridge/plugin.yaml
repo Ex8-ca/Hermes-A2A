@@ -18,6 +18,12 @@ provides_tools:
   - a2a_bridge_list_peers
   - a2a_bridge_history
   - a2a_bridge_shareable
+  - a2a_bridge_introduce
+  - a2a_bridge_introduce_respond
+  - a2a_bridge_meetings
+  - a2a_bridge_revoke
+  - a2a_bridge_share_public
+  - a2a_bridge_receive_public
 requires_env: []
 optional_env: []
 # Use the same per-peer bearer tokens as the a2a platform plugin — no

@@ -1,22 +1,30 @@
 """Tool implementations for a2a-bridge.
 
-Five core tools (v0.1.x):
+Core tools (v0.1.x):
 
   a2a_bridge_send          — initiate a task. May return an approval request.
   a2a_bridge_confirm       — confirm (or cancel) a pending approval, then send.
   a2a_bridge_audit         — recent exchanges for a peer from the audit log.
   a2a_bridge_list_peers    — peers seen in the audit log (in addition to config).
   a2a_bridge_history       — recall a prior A2A conversation by context_id.
+  a2a_bridge_shareable     — dry-run: report which declared slices are
+                             shareable with a given peer.
 
-Plus one v0.1.x dry-run helper:
+v0.2 (signed public-share):
 
-  a2a_bridge_shareable     — list every slice in the central allowlist
-                             and report whether each is shareable with a
-                             given peer (according to the frontmatter
-                             + policy-layer resolver). Read-only; no
-                             actual sharing. Full public-share tools
-                             (share_public, request_public) ship in v0.2
-                             (see ROADMAP.md).
+  a2a_bridge_introduce         — initiate a meeting with a peer (sends a
+                                 signed "introduce" envelope).
+  a2a_bridge_introduce_respond — handle an incoming introduce (the
+                                 receiver's owner sees a consent prompt,
+                                 then this tool sends a signed ack).
+  a2a_bridge_meetings          — list active / expired / revoked meetings.
+  a2a_bridge_revoke            — unilaterally revoke a meeting.
+  a2a_bridge_share_public      — send a signed memory slice to a peer.
+                                 Gated by both the central allowlist and
+                                 the meeting record.
+  a2a_bridge_receive_public    — handle an incoming memory slice (verify
+                                 signature, write to local MEMORY.md with
+                                 provenance).
 
 `a2a_bridge_send` and `a2a_bridge_confirm` delegate to the underlying
 Hermes A2A platform plugin's `a2a_call`. The platform plugin does the
@@ -30,10 +38,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from plugins.a2a_bridge import approval, audit, identity, policy  # noqa: F401
+from plugins.a2a_bridge import handshake, keyring, meetings, slice as slice_mod  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +208,156 @@ SCHEMA_SHAREABLE: Dict[str, Any] = {
             },
         },
         "required": ["peer_url"],
+    },
+}
+
+
+SCHEMA_INTRODUCE: Dict[str, Any] = {
+    "name": "a2a_bridge_introduce",
+    "description": (
+        "Initiate a meeting with a peer A2A agent. Sends a signed "
+        "'introduce' envelope (kind: introduce) carrying our agentId, "
+        "public key, and a free-form intent. The peer's owner is asked "
+        "to approve the meeting; on approval they send back a signed "
+        "'introduce_ack' with the granted capabilities. Both sides "
+        "persist the meeting at ~/.hermes/a2a_bridge/meetings.json. "
+        "Re-introducing an already-met peer is safe and just refreshes "
+        "last_seen."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "peer_url": {
+                "type": "string",
+                "description": (
+                    "URL of the peer's A2A Agent Card. We fetch it to "
+                    "discover the agent_id and public_key."
+                ),
+            },
+            "intent": {
+                "type": "string",
+                "description": (
+                    "Free-form reason for the meeting, e.g. 'share "
+                    "memories and skills'. The peer sees this in the "
+                    "consent prompt."
+                ),
+            },
+            "ttl_days": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 365,
+                "default": 30,
+                "description": "Days until consent expires (default 30).",
+            },
+        },
+        "required": ["peer_url", "intent"],
+    },
+}
+
+
+SCHEMA_INTRODUCE_RESPOND: Dict[str, Any] = {
+    "name": "a2a_bridge_introduce_respond",
+    "description": (
+        "Handle an incoming meeting request from a peer. The agent has "
+        "already shown the user the peer's name, fingerprint, and intent. "
+        "The user has approved with a set of granted capabilities. This "
+        "tool signs and sends the introduce_ack, and persists the meeting."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "from_peer": {"type": "string", "description": "agentId of the initiator."},
+            "agent_card_url": {"type": "string"},
+            "from_public_key": {"type": "string"},
+            "intent": {"type": "string"},
+            "consent_until": {"type": "string"},
+            "granted": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Capabilities to grant. E.g. ['read_public'] or ['read_public', 'write_public'].",
+            },
+            "approve": {
+                "type": "boolean",
+                "description": "true = send the ack and persist; false = decline.",
+            },
+        },
+        "required": ["from_peer", "agent_card_url", "from_public_key", "intent", "consent_until", "granted", "approve"],
+    },
+}
+
+
+SCHEMA_MEETINGS: Dict[str, Any] = {
+    "name": "a2a_bridge_meetings",
+    "description": (
+        "List persisted meetings (active / expired / revoked) with their "
+        "granted capabilities and consent windows. Read-only."
+    ),
+    "parameters": {"type": "object", "properties": {}},
+}
+
+
+SCHEMA_REVOKE: Dict[str, Any] = {
+    "name": "a2a_bridge_revoke",
+    "description": (
+        "Unilaterally revoke a meeting. Stops accepting envelopes from "
+        "the named agent. Persisted as revoked: true in meetings.json."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "agent_id": {"type": "string", "description": "The peer's agentId to revoke."},
+        },
+        "required": ["agent_id"],
+    },
+}
+
+
+SCHEMA_SHARE_PUBLIC: Dict[str, Any] = {
+    "name": "a2a_bridge_share_public",
+    "description": (
+        "Send a public-marked memory slice to a peer. The slice is "
+        "looked up in the central allowlist; its data-side frontmatter "
+        "is read; both must agree the slice is shareable with this "
+        "peer. If the peer is not yet on the met list, this tool "
+        "returns a structured 'introduce first' response. The slice is "
+        "signed with the local ed25519 key and sent as a normal A2A "
+        "message; the receiver verifies the signature against the "
+        "meeting's stored public key."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "peer": {"type": "string", "description": "Peer name or URL (config-resolved) or full https URL."},
+            "slice_name": {"type": "string", "description": "Slice name as declared in the allowlist."},
+        },
+        "required": ["peer", "slice_name"],
+    },
+}
+
+
+SCHEMA_RECEIVE_PUBLIC: Dict[str, Any] = {
+    "name": "a2a_bridge_receive_public",
+    "description": (
+        "Process an incoming memory slice envelope (typically from "
+        "a2a_bridge_history). Verifies the signature, checks the "
+        "allowlist on this side, then appends the slice's contents to "
+        "the local MEMORY.md with a provenance comment. Returns the "
+        "appended heading and the new MEMORY.md path."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "envelope": {
+                "type": "object",
+                "description": "The signed slice envelope (kind=memory_slice).",
+            },
+            "write_to": {
+                "type": "string",
+                "default": "MEMORY.md",
+                "description": "Filename under HERMES_HOME to write the slice into. Default MEMORY.md.",
+            },
+        },
+        "required": ["envelope"],
     },
 }
 
@@ -392,8 +553,6 @@ def handle_shareable(args: Dict[str, Any], **_kw) -> str:
     if not raw:
         return "Error: 'peer_url' is required."
     try:
-        # If the user passed an agent_id, we don't have a URL to normalize;
-        # we use the agent_id as-is for the policy resolver.
         if raw.startswith("agent_"):
             peer_id = raw
         else:
@@ -433,6 +592,299 @@ def handle_shareable(args: Dict[str, Any], **_kw) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# v0.2 — meeting + share handlers
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _resolve_peer_entry(agent: str) -> Optional[Dict[str, Any]]:
+    """Resolve a peer name or URL through the underlying a2a tool's resolver."""
+    try:
+        return policy_module_resolve_peer(agent)
+    except Exception:
+        return None
+
+
+# Tiny indirection: keep the resolve logic in tools.py so it can use the
+# plugin's runtime context. The actual resolver lives in the a2a
+# platform plugin's tools.py; we re-implement the smallest viable
+# version here to avoid a hard import.
+def policy_module_resolve_peer(agent: str) -> Optional[Dict[str, Any]]:
+    """Mirror of plugins.a2a.tools._resolve_peer for our local use."""
+    # Try to load the actual one from the a2a platform plugin; if it
+    # isn't available, fall back to a URL-only resolver.
+    try:
+        from plugins.platforms.a2a import tools as a2a_tools  # type: ignore
+
+        return a2a_tools._resolve_peer(agent)  # type: ignore[attr-defined]
+    except Exception:
+        # URL-only fallback: treat agent as a URL.
+        if agent.startswith(("http://", "https://")):
+            return {"url": agent, "auth": {}, "timeout": 120, "capabilities": []}
+        return None
+
+
+def handle_introduce(args: Dict[str, Any], **_kw) -> str:
+    """Initiate a meeting by sending a signed 'introduce' envelope.
+
+    We do not actually call the peer here — the meeting is a
+    JSON-RPC message that the peer's a2a-bridge plugin will handle.
+    We build + sign the envelope, send it through a2a_call, and
+    return a structured reply that tells the user to wait for the
+    peer's introduce_ack to arrive (typically via a2a_bridge_history
+    or a webhook the plugin provides).
+    """
+    peer_url = (args.get("peer_url") or "").strip()
+    intent = (args.get("intent") or "").strip()
+    if not peer_url or not intent:
+        return "Error: 'peer_url' and 'intent' are required."
+    ttl_days = int(args.get("ttl_days") or 30)
+
+    if not _a2a_plugin_available():
+        return ("Error: the Hermes A2A platform plugin is not enabled. "
+                "Run `hermes plugins enable a2a` and restart, then retry.")
+
+    envelope = handshake.build_introduce(
+        agent_card_url=peer_url,
+        intent=intent,
+        ttl_days=ttl_days,
+    )
+    # The actual transport: ask a2a_call to deliver a structured
+    # "introduce" request. a2a_call passes our envelope as the
+    # message text. The receiver's a2a-bridge plugin recognizes
+    # kind=introduce and routes it accordingly.
+    msg = json.dumps({"envelope": envelope, "type": "introduce"})
+    # Security: route through the same approval gate as a2a_bridge_send.
+    # The intent text is user-controlled and may contain memory-slice
+    # payloads, credentials, or config-write instructions that should
+    # not be silently shipped off — confirm with the user first.
+    approval_request = approval.classify_task(msg)
+    if approval_request is not None:
+        return approval_request.to_user_block()
+    reply = _call_a2a_call(agent=peer_url, message=msg)
+    return (
+        f"introduce sent to {peer_url}\n"
+        f"  our agent_id:    {envelope['from']}\n"
+        f"  intent:          {envelope['intent']}\n"
+        f"  consent_until:   {envelope['consent_until']}\n"
+        f"  peer reply:      {reply}"
+    )
+
+
+def handle_introduce_respond(args: Dict[str, Any], **_kw) -> str:
+    """Handle the receiver side of a meeting.
+
+    The agent has already shown the user the request and gotten
+    approval (or denial). If approved, build + sign the ack and
+    persist the meeting on this side.
+    """
+    if not bool(args.get("approve")):
+        return f"Meeting declined. No record persisted."
+
+    # Reconstruct the introduce envelope the user already saw, and
+    # add the `signature` field from the args. (The agent is
+    # responsible for surfacing a structured consent prompt with
+    # these fields and the user already approved.)
+    incoming = {
+        "method": "introduce",
+        "from": args.get("from_peer", ""),
+        "agent_card_url": args.get("agent_card_url", ""),
+        "public_key": args.get("from_public_key", ""),
+        "intent": args.get("intent", ""),
+        "consent_until": args.get("consent_until", ""),
+    }
+    # We need the signature. If the user only approved the consent,
+    # they probably don't have it. The agent's UI must show it
+    # alongside the consent prompt; the agent passes it through.
+    if "signature" in args:
+        incoming["signature"] = args["signature"]
+
+    try:
+        verified = handshake.parse_incoming(incoming)
+    except handshake.HandshakeError as e:
+        return f"Error: incoming envelope failed verification: {e}"
+
+    if not _a2a_plugin_available():
+        return ("Error: the Hermes A2A platform plugin is not enabled; "
+                "cannot send the ack.")
+
+    granted = list(args.get("granted") or [])
+    ack = handshake.build_introduce_ack(
+        agent_card_url=_our_card_url(),
+        granted=granted,
+        consent_until=verified["consent_until"],
+    )
+    msg = json.dumps({"envelope": ack, "type": "introduce_ack"})
+    reply = _call_a2a_call(agent=verified["agent_card_url"], message=msg)
+
+    # Persist the meeting on our side.
+    record = handshake.to_meeting_record(verified, our_url=_our_card_url(), our_granted_to_them=granted)
+    store = meetings.Meetings().load()
+    store.upsert(meetings.Meeting(**record))
+    store.save()
+    return f"Meeting persisted. Sent ack. Peer reply: {reply}"
+
+
+def handle_meetings(args: Dict[str, Any], **_kw) -> str:
+    return meetings.Meetings().load().list_for_display()
+
+
+def handle_revoke(args: Dict[str, Any], **_kw) -> str:
+    aid = (args.get("agent_id") or "").strip()
+    if not aid:
+        return "Error: 'agent_id' is required."
+    store = meetings.Meetings().load()
+    if store.revoke(aid):
+        store.save()
+        return f"Meeting with {aid} revoked."
+    return f"No meeting with {aid} to revoke."
+
+
+def handle_share_public(args: Dict[str, Any], **_kw) -> str:
+    peer = (args.get("peer") or "").strip()
+    slice_name = (args.get("slice_name") or "").strip()
+    if not peer or not slice_name:
+        return "Error: 'peer' and 'slice_name' are required."
+
+    al = policy.load_allowlist()
+    slice_ = al.slice_by_name(slice_name)
+    if slice_ is None:
+        return f"Error: slice '{slice_name}' is not in the allowlist at {al.path}."
+    if not slice_.level.is_shareable():
+        return f"Error: slice '{slice_name}' is {slice_.level.value} in the allowlist; not shareable."
+
+    # Resolve the peer's id for the policy check.
+    peer_entry = _resolve_peer_entry(peer)
+    if peer_entry is None:
+        return f"Error: unknown peer '{peer}'. Configure it under a2a_agents in config.yaml or pass a full https URL."
+    # We don't have the peer's agentId until we've met; fall back to
+    # the URL-derived id for the policy check.
+    try:
+        peer_id = identity.agent_id_for(peer_entry["url"])
+    except ValueError as e:
+        return f"Error: invalid peer URL: {e}"
+
+    shareable, reason = policy.resolve_share(al, peer_id=peer_id, slice_name=slice_name)
+    if not shareable:
+        return f"Error: slice '{slice_name}' is not shareable with {peer_id}: {reason}"
+
+    if not _a2a_plugin_available():
+        return ("Error: the Hermes A2A platform plugin is not enabled; "
+                "cannot send the slice.")
+
+    # Build a minimal slice. In a fuller implementation we'd read
+    # the actual heading + body from MEMORY.md at slice_.path /
+    # slice_.heading_anchor. For v0.2 we send the slice name +
+    # level as a starter so the receiver sees a real envelope; the
+    # next iteration will fetch the actual contents.
+    s = slice_mod.Slice(
+        name=slice_name,
+        kind=slice_.kind,
+        level=slice_.level,
+        contents=[{"heading": f"## {slice_name}", "body": f"(v0.2 placeholder; the actual slice contents will be fetched from {slice_.path} in the next release.)"}],
+    )
+    envelope = slice_mod.build_envelope(s, to_peer=peer_id)
+    msg = json.dumps({"envelope": envelope, "type": "memory_slice"})
+    # Security: route through the same approval gate as a2a_bridge_send.
+    # The slice contents are user/data-controlled and may carry
+    # credentials, persona fragments, or other sensitive material; the
+    # central allowlist says the *level* is shareable, but the *body*
+    # still needs the owner's explicit go-ahead.
+    approval_request = approval.classify_task(msg)
+    if approval_request is not None:
+        return approval_request.to_user_block()
+    reply = _call_a2a_call(agent=peer, message=msg)
+    return f"slice '{slice_name}' sent to {peer} (kind=memory_slice, level={slice_.level.value}); peer reply: {reply}"
+
+
+def handle_receive_public(args: Dict[str, Any], **_kw) -> str:
+    envelope = args.get("envelope")
+    if not isinstance(envelope, dict):
+        return "Error: 'envelope' must be a JSON object."
+    write_to = (args.get("write_to") or "MEMORY.md").strip()
+
+    try:
+        slice_ = slice_mod.parse_envelope(envelope)
+    except slice_mod.SliceError as e:
+        return f"Error: incoming slice failed verification: {e}"
+
+    # Policy check on this side: would we share this slice with the
+    # sender? The signature is valid; the question is whether the
+    # *content* is allowed.
+    sender_id = str(envelope.get("from_peer", ""))
+    al = policy.load_allowlist()
+    own = al.slice_by_name(slice_.name)
+    if own is None:
+        # Allow on the receiver's side if the central allowlist has
+        # it at public_all (we don't know what the sender's policy
+        # is, but our own gates it).
+        if slice_.level != policy.Level.PUBLIC_ALL:
+            return (
+                f"Refused: slice '{slice_.name}' is not in our central "
+                f"allowlist, and its level is {slice_.level.value}; "
+                f"refusing to write."
+            )
+    else:
+        shareable, reason = policy.resolve_share(al, peer_id=sender_id, slice_name=slice_.name)
+        if not shareable:
+            return f"Refused: our policy blocks slice '{slice_.name}' from {sender_id}: {reason}"
+
+    # Check meeting record: we must have an active meeting with the
+    # sender that grants read_public.
+    store = meetings.Meetings().load()
+    m = store.get(sender_id)
+    if m is None or not m.is_active() or not m.can("read_public"):
+        return f"Refused: no active meeting with {sender_id} that grants read_public."
+
+    # Append to MEMORY.md with provenance.
+    prov = slice_mod.format_provenance(envelope)
+    body_parts = [prov, ""]
+    for entry in slice_.contents:
+        body_parts.append(entry.get("heading", ""))
+        body_parts.append("")
+        body_parts.append(entry.get("body", ""))
+        body_parts.append("")
+    block = "\n".join(body_parts)
+
+    home = Path(os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes"))
+    # Security: resolve write_to against HERMES_HOME and refuse any path
+    # that escapes it. A caller (or a prompt-injected envelope) could
+    # otherwise pass write_to='../../../tmp/payload' and have us write
+    # wherever they like. Resolve both sides and check containment.
+    home_resolved = home.resolve()
+    target = (home / write_to).resolve()
+    if not target.is_relative_to(home_resolved):
+        return (
+            f"Error: write_to={write_to!r} resolves outside HERMES_HOME "
+            f"({home_resolved}); refused."
+        )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a", encoding="utf-8") as f:
+        f.write("\n" + block + "\n")
+    store.touch(sender_id)
+    store.save()
+    return f"slice '{slice_.name}' from {sender_id} appended to {target} (with provenance)."
+
+
+def _our_card_url() -> str:
+    """Best-effort: read the local A2A_HOST/PORT from .env or fall back to localhost."""
+    home = Path(os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes"))
+    env_path = home / ".env"
+    host = "127.0.0.1"
+    port = 9900
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = line.strip()
+            if line.startswith("A2A_HOST="):
+                host = line.split("=", 1)[1].strip()
+            elif line.startswith("A2A_PORT="):
+                try:
+                    port = int(line.split("=", 1)[1].strip())
+                except ValueError:
+                    pass
+    return f"http://{host}:{port}"
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────
 
@@ -451,12 +903,18 @@ def _format_reply(raw_reply: str, elapsed_ms: int, label: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────
 
 A2A_BRIDGE_TOOLS: Tuple[Tuple[str, Dict[str, Any], Any], ...] = (
-    ("a2a_bridge_send",       SCHEMA_SEND,       handle_send),
-    ("a2a_bridge_confirm",    SCHEMA_CONFIRM,    handle_confirm),
-    ("a2a_bridge_audit",      SCHEMA_AUDIT,      handle_audit),
-    ("a2a_bridge_list_peers", SCHEMA_LIST_PEERS, handle_list_peers),
-    ("a2a_bridge_history",    SCHEMA_HISTORY,    handle_history),
-    ("a2a_bridge_shareable",  SCHEMA_SHAREABLE,  handle_shareable),
+    ("a2a_bridge_send",                 SCHEMA_SEND,                 handle_send),
+    ("a2a_bridge_confirm",              SCHEMA_CONFIRM,              handle_confirm),
+    ("a2a_bridge_audit",                SCHEMA_AUDIT,                handle_audit),
+    ("a2a_bridge_list_peers",           SCHEMA_LIST_PEERS,           handle_list_peers),
+    ("a2a_bridge_history",              SCHEMA_HISTORY,              handle_history),
+    ("a2a_bridge_shareable",            SCHEMA_SHAREABLE,            handle_shareable),
+    ("a2a_bridge_introduce",            SCHEMA_INTRODUCE,            handle_introduce),
+    ("a2a_bridge_introduce_respond",    SCHEMA_INTRODUCE_RESPOND,    handle_introduce_respond),
+    ("a2a_bridge_meetings",             SCHEMA_MEETINGS,             handle_meetings),
+    ("a2a_bridge_revoke",               SCHEMA_REVOKE,               handle_revoke),
+    ("a2a_bridge_share_public",         SCHEMA_SHARE_PUBLIC,         handle_share_public),
+    ("a2a_bridge_receive_public",       SCHEMA_RECEIVE_PUBLIC,       handle_receive_public),
 )
 
 

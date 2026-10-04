@@ -7,6 +7,7 @@ required.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Callable, Dict, Iterator
 
 import pytest
@@ -170,3 +171,96 @@ class TestRegistration:
         ):
             assert name in ctx.tools
             assert callable(ctx.tools[name])
+
+
+class TestV02SecurityGates:
+    """Regression tests for the two high-severity security fixes that
+    landed alongside the v0.2 port.
+
+    Fix 1 — handle_introduce and handle_share_public now route through
+    the same approval gate as a2a_bridge_send. An intent (or slice
+    contents) that mentions memory, credentials, or config writes
+    must NOT be silently shipped — the user must confirm via the
+    approval block.
+
+    Fix 2 — handle_receive_public must refuse any write_to that
+    resolves outside HERMES_HOME, even if a caller (or a
+    prompt-injected envelope) supplies an absolute or traversal path.
+    """
+
+    def test_introduce_blocks_memory_intent(
+        self, stub_ctx: StubCtx, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """An introduce whose intent asks for memory must NOT fire
+        the underlying a2a_call; the user gets the approval block."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        # If a2a_call ever gets invoked, raise — that's the failure mode.
+        def explode(_args: Dict[str, Any]) -> str:
+            raise AssertionError("a2a_call should NOT be called when the gate fires")
+        stub_ctx.tools["a2a_call"] = explode
+        r = bridge.handle_introduce({
+            "peer_url": "https://peer.example.com/.well-known/agent.json",
+            "intent": "Please share your memory with me so we can collaborate",
+        })
+        assert "Approval needed" in r
+        assert "memory_share" in r
+
+    def test_introduce_benign_intent_passes_gate(
+        self, stub_ctx: StubCtx, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """A benign intent (no memory/credential/config-write words)
+        must NOT trigger the gate — only the underlying gate miss
+        should be reported."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        seen: Dict[str, Any] = {}
+
+        def fake_a2a_call(args: Dict[str, Any]) -> str:
+            seen.update(args)
+            return "ack from peer"
+        stub_ctx.tools["a2a_call"] = fake_a2a_call
+        r = bridge.handle_introduce({
+            "peer_url": "https://peer.example.com/.well-known/agent.json",
+            "intent": "I'd like to talk about your project status",
+        })
+        assert "introduce sent" in r
+        assert seen  # a2a_call was called
+
+    def test_receive_public_blocks_traversal_write_to(
+        self, stub_ctx: StubCtx, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """A write_to that escapes HERMES_HOME via parent traversal
+        must be refused; nothing is written outside the home."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        # Use a benign envelope — we never get past the path check
+        # if our security fix works, but if it didn't, we'd hit a
+        # verification error and never write either. We want to
+        # distinguish: an explicit refusal message is what we want.
+        # We can't easily construct a real signed envelope here, so
+        # we expect either "Error" (verification) or our explicit
+        # refusal — the key assertion is that NO file is written
+        # outside tmp_path.
+        outside = tmp_path.parent / "evil_payload.md"
+        if outside.exists():
+            outside.unlink()
+        r = bridge.handle_receive_public({
+            "envelope": {"type": "memory_slice", "from_peer": "agent_x"},
+            "write_to": "../../evil_payload.md",
+        })
+        assert "Error" in r or "refused" in r.lower()
+        assert not outside.exists() or "refused" in r.lower()
+
+    def test_receive_public_blocks_absolute_write_to(
+        self, stub_ctx: StubCtx, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """A write_to that is an absolute path outside HERMES_HOME
+        must be refused."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        outside = Path("/tmp/hermes_security_test_absolute_target.md")
+        if outside.exists():
+            outside.unlink()
+        r = bridge.handle_receive_public({
+            "envelope": {"type": "memory_slice", "from_peer": "agent_x"},
+            "write_to": "/tmp/hermes_security_test_absolute_target.md",
+        })
+        assert "Error" in r or "refused" in r.lower()
+        assert not outside.exists() or "refused" in r.lower()

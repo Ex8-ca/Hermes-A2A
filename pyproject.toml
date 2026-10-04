@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hermes-a2a-bridge"
-version = "0.1.0"
+version = "0.2.0"
 description = "One-line inter-agent tasks over A2A — wraps the bundled Hermes A2A platform plugin's outbound tools with reply formatting, audit-log lookup, and an approval gate for sensitive tasks."
 readme = "README.md"
 license = {text = "MIT"}
@@ -29,6 +29,10 @@ dependencies = [
     # Used by the public-marking allowlist (see plugins/a2a_bridge/policy.py).
     # Pure-Python; the C-extension build is much faster but optional.
     "PyYAML>=6.0",
+    # Used by the v0.2 ed25519 identity layer (see plugins/a2a_bridge/identity.py).
+    # `cryptography` is a well-audited, widely-deployed library. The
+    # manylinux wheels cover every platform Hermes supports.
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]
