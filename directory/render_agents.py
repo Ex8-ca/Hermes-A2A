@@ -57,6 +57,16 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--list-url", default="https://hermes-a2a.dpmob.com/list")
     ap.add_argument("--pages-dir", default="directory/pages")
+    ap.add_argument(
+        "--prune",
+        action="store_true",
+        help=(
+            "Delete per-agent HTML files in pages/agent/ for agent_ids "
+            "that are no longer in the live catalog. The _template.html "
+            "file is preserved. Useful after a v0.3.3-style delete to "
+            "keep the build-time artifacts in sync with the live KV."
+        ),
+    )
     args = ap.parse_args()
 
     catalog = fetch_list(args.list_url)
@@ -80,6 +90,26 @@ def main() -> int:
         print(f"wrote {out_path} ({entry.get('name', agent_id)})")
 
     print(f"done: {len(out_paths)} agent page(s) rendered")
+
+    if args.prune:
+        live_ids = {entry["agent_id"] for entry in agents}
+        agent_dir = Path(args.pages_dir) / "agent"
+        pruned = []
+        for path in agent_dir.glob("*.html"):
+            # Skip the template; it's not an agent page.
+            if path.name == "_template.html":
+                continue
+            stem = path.stem
+            if stem not in live_ids:
+                path.unlink()
+                pruned.append(path.name)
+        if pruned:
+            print(f"pruned {len(pruned)} stale HTML file(s):")
+            for name in pruned:
+                print(f"  removed {agent_dir / name}")
+        else:
+            print("prune: no stale files found")
+
     return 0
 
 

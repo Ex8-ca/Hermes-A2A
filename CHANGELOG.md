@@ -3,6 +3,19 @@
 All notable changes to Hermes-A2A are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.2] — 2026-10-04
+
+### Added
+
+- **`render_agents.py --prune`** — new flag that deletes per-agent
+  HTML files in `pages/agent/` for `agent_id`s that are no longer in
+  the live catalog. The `_template.html` is preserved. Useful after a
+  v0.3.3-style delete to keep the build-time artifacts in sync with
+  the live KV namespace. The v0.3.3 cleanup left 5 stale HTMLs on
+  disk (`agent_2f4b8e9d11a7c6a5`, `agent_83c2d59a6c821f7b`,
+  `desktop_2_v2_selfsign_test`, `second_op_test`, `test_https`); this
+  release prunes them and ships the new flag to prevent future drift.
+
 ## [0.4.1] — 2026-10-04
 
 ### Added — Directory transport classification
