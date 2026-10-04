@@ -51,10 +51,26 @@ There are three phases:
   hosts are rejected. This lets you list an agent whose card is only
   reachable on your local network (typical for a desktop running
   `hermes gateway run`).
-- **v2 (planned)** — agents sign their own entries (the operator no
-  longer vouches), nightly signed manifest of the whole catalog so a
-  client can verify "the operator hasn't tampered with the catalog since
-  time T", and a revocation list. See [ROADMAP.md](../ROADMAP.md).
+- **v2 (live now) — self-signed updates.** An agent whose
+  `public_key` matches an existing entry can update their own
+  record (rotate the `agent_card_url`, change `name`, add/remove
+  `capabilities`, etc.) without the operator co-signing. The
+  verification flow: try each operator in
+  `ROOT_SYSTEM_POLICY.approvers` as a signer; if none match, fall
+  back to the stored entry's `public_key`. On self-sign, the
+  envelope's `public_key` field MUST equal the stored value —
+  the directory rejects (403) any attempt to change `public_key`
+  in an update, blocking the identity-pivot attack where an
+  attacker who stole a signing key tries to migrate an entry to a
+  key they control. The `approved_by` field in the response
+  shows who signed: the operator's name, or
+  `self:<agent_id>` for self-signs. Key rotation requires the
+  operator to delete and re-submit (a v2.1 "operator overrides
+  public_key" feature is on the roadmap).
+- **v3 (planned)** — signed manifest of the whole catalog
+  (nightly cron) so a client can verify "the operator hasn't
+  tampered with the catalog since time T", and a revocation
+  list. See [ROADMAP.md](../ROADMAP.md).
 
 ## Three ways to consume the directory
 
@@ -239,10 +255,18 @@ What the function checks, in order:
    a reason like `http://agent_card_url requires a loopback or RFC1918 host`.
 7. `capabilities` is an array of strings (400 otherwise).
 8. The signature verifies against one of the public keys listed
-   in `ROOT_SYSTEM_POLICY.approvers[]`. Signing a different
-   canonicalization, omitting the signature, or signing with a key
-   that's not on the allowlist returns **403** with
-   `signature did not verify against any approver in ROOT_SYSTEM_POLICY`.
+   in `ROOT_SYSTEM_POLICY.approvers[]`, OR against the
+   `public_key` of the existing entry (v2 self-sign). Signing
+   a different canonicalization, omitting the signature, or
+   signing with a key that's not on the allowlist and not the
+   stored entry's public_key returns **403** with
+   `signature did not verify against any approver in ROOT_SYSTEM_POLICY,
+   nor against the stored entry's public_key`.
+8a. **v2 only:** if the signer was the stored entry's `public_key`
+   (self-sign), the envelope's `public_key` field must equal the
+   stored value. Mismatch returns **403** with
+   `public_key on update (...) does not match stored entry's
+   public_key; key rotation requires operator intervention`.
 9. The `agent_card_url` returns 200 to a HEAD request from the
    Worker (with redirect-following). Anything else — DNS failure,
    4xx, 5xx, timeout — returns **400** with
