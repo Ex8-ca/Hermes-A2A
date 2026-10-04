@@ -3,6 +3,37 @@
 All notable changes to Hermes-A2A are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.1] — 2026-10-04
+
+### Fixed — Plugin install script
+
+- `scripts/install-gateway-service.sh` — the wrapper script used to
+  block in the foreground waiting for `hermes gateway run` to exit
+  (which it never does). With `Type=oneshot + RemainAfterExit=yes`
+  this meant `systemctl start` would block for up to `TimeoutStartSec`
+  seconds and then the service was marked `failed` (timeout) on some
+  systemd versions. The fix:
+
+  * The wrapper now `setsid`s the gateway into a detached process
+    group, writes its PID to `~/.hermes/a2a-bridge/gateway.pid`, and
+    exits 0 immediately.
+  * If the gateway process exits within 2 seconds with the per-host
+    singleton message ("already serves profile 'default'"), the
+    wrapper finds the *existing* gateway listening on port 9900 via
+    `ss`, writes *its* PID to the PID file, and exits 0. This makes
+    the wrapper safe to run on a host that already has a gateway
+    (e.g. one started by the desktop) — it tracks the existing one
+    instead of failing.
+  * `TimeoutStartSec` lowered to 15s (the wrapper should return in
+    under 3s in normal operation).
+  * The unit file gets an `ExecStop` that uses the PID file to
+    terminate the gateway cleanly on `systemctl stop`, and removes
+    the PID file.
+
+  Operators upgrading from v0.3.0 should re-run
+  `./scripts/install-gateway-service.sh --uninstall && ./scripts/install-gateway-service.sh --start`
+  on each host. The PID file format is forward-compatible.
+
 ## [0.3.0] — 2026-10-04
 
 ### Added — Plugin

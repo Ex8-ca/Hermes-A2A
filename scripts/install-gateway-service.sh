@@ -64,7 +64,15 @@ mkdir -p "$(dirname "$WRAPPER_PATH")"
 cat > "$WRAPPER_PATH" <<'WRAPPER_EOF'
 #!/usr/bin/env bash
 # run-hermes-gateway.sh — wrapper for the systemd service
-# Wraps `hermes gateway run` with the right Python interpreter and env.
+# Forks `hermes gateway run` into the background, writes the PID to
+# ~/.hermes/a2a-bridge/gateway.pid, and exits 0 immediately. This
+# matches the Type=oneshot + RemainAfterExit=yes contract: the
+# service is "active" as soon as the wrapper returns, even though
+# the gateway keeps running.
+#
+# If a gateway is already running (per-profile singleton, exit 75
+# from the inner command), we map that to 0 too — the service is
+# "active" because a gateway is up, just not via us.
 set -e
 export HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 export PYTHONPATH="$HERMES_HOME/hermes-agent"
@@ -73,26 +81,62 @@ if [ -z "$PYTHON_BIN" ] || [ ! -x "$PYTHON_BIN" ]; then
     echo "ERROR: no hermes-managed python3 found under $HERMES_HOME/tools/" >&2
     exit 1
 fi
-# Run the gateway. If another gateway is already running, the per-profile
-# singleton gate inside `hermes gateway run` exits with status 75. That's
-# NOT a failure from systemd's point of view (the gateway is up, just not
-# via us), so map it to 0. Anything else passes through.
-set +e
-"$PYTHON_BIN" -I -c "
+
+PIDFILE="$HERMES_HOME/a2a-bridge/gateway.pid"
+LOGFILE="$HERMES_HOME/a2a-bridge/gateway.log"
+mkdir -p "$(dirname "$PIDFILE")"
+
+# If a previous PID file exists and the process is still alive, do
+# nothing — systemd's job is "the gateway is up", not "we started
+# it just now". This is what makes the service safe to call from
+# login scripts too.
+if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+    echo "Gateway already running (pid $(cat "$PIDFILE")) — leaving it alone."
+    exit 0
+fi
+
+# Launch the gateway in a detached process group, write the PID.
+# `setsid` so the new process is its own session leader (survives
+# the wrapper's exit; not affected by Ctrl-C on the calling tty).
+# `</dev/null` so the gateway doesn't keep the wrapper's stdin.
+setsid "$PYTHON_BIN" -I -c "
 import os, sys
 os.environ['HERMES_HOME'] = os.environ['HERMES_HOME']
 sys.path.insert(0, os.environ['PYTHONPATH'])
 from hermes_cli.main import main
 sys.argv = ['hermes', 'gateway', 'run']
 main()
-" < /dev/null
-rc=$?
-set -e
-if [ "$rc" -eq 75 ]; then
-    echo "Another gateway already serves default — leaving it running."
-    exit 0
+" </dev/null >"$LOGFILE" 2>&1 &
+GW_PID=$!
+echo "$GW_PID" > "$PIDFILE"
+echo "Gateway launched (pid $GW_PID); see $LOGFILE."
+# Give the gateway a moment to either succeed or fail loudly.
+# hermes gateway run is a per-profile/host singleton: if another
+# gateway is already listening on 9900, this one exits almost
+# immediately. Detect that by checking the log for the singleton
+# message; if found, find the *existing* gateway and point the
+# PID file at it. Either way, systemd's job is "a gateway is up
+# on 9900", not "we started it just now".
+sleep 2
+if ! kill -0 "$GW_PID" 2>/dev/null; then
+    if grep -q "already serves" "$LOGFILE" 2>/dev/null; then
+        # Another gateway is already up. Find it via ss on port 9900
+        # and write *its* PID to the PID file.
+        EXISTING=$(ss -tlnpH 'sport = :9900' 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1)
+        if [ -n "$EXISTING" ] && kill -0 "$EXISTING" 2>/dev/null; then
+            echo "$EXISTING" > "$PIDFILE"
+            echo "Existing gateway (pid $EXISTING) is serving 9900; tracking it instead."
+            exit 0
+        fi
+        echo "Another gateway is on 9900 but I can't identify its PID. Leaving no PID file." >&2
+        rm -f "$PIDFILE"
+        exit 0
+    fi
+    echo "Gateway failed to start; see $LOGFILE." >&2
+    rm -f "$PIDFILE"
+    exit 1
 fi
-exit "$rc"
+exit 0
 WRAPPER_EOF
 chmod +x "$WRAPPER_PATH"
 ok "Wrapper written to $WRAPPER_PATH"
@@ -119,14 +163,18 @@ ExecStart=$WRAPPER_PATH
 # breaks \`ruamel.yaml\` and similar deps.
 #
 # Type=oneshot + RemainAfterExit=yes means:
-#   - systemd runs the command at boot (and on first \`systemctl start\`)
-#   - the wrapper script maps the gateway's "another instance is running"
-#     exit code (75) to 0, so the service succeeds whether we start the
-#     gateway ourselves or find one already running (per-profile singleton)
-#   - we do NOT auto-restart on exit; the gateway is supposed to run until
-#     you stop it (systemctl --user stop). If it dies, the next service
-#     start (or a manual systemctl start) will replace it.
-TimeoutStartSec=45
+#   - systemd runs the wrapper at boot (and on first \`systemctl start\`)
+#   - the wrapper forks the gateway into a new session and exits 0
+#     immediately, so the service is "active" as soon as the wrapper
+#     returns. The gateway keeps running independently.
+#   - the wrapper writes the gateway's PID to
+#     $HERMES_HOME/a2a-bridge/gateway.pid, which ExecStop uses to
+#     terminate cleanly on \`systemctl stop\`.
+#   - we do NOT auto-restart on exit; the gateway is supposed to run
+#     until you stop it (systemctl --user stop). If it dies, the next
+#     \`systemctl start\` will replace it.
+TimeoutStartSec=15
+ExecStop=/bin/bash -c 'if [ -f "$HERMES_HOME/a2a-bridge/gateway.pid" ]; then kill -TERM "\$(cat "$HERMES_HOME/a2a-bridge/gateway.pid")" 2>/dev/null || true; rm -f "$HERMES_HOME/a2a-bridge/gateway.pid"; fi'
 
 [Install]
 WantedBy=default.target
