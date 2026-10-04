@@ -1,121 +1,364 @@
-# hermes-a2a.dpmob.com — agent directory
+# hermes-a2a.dpmob.com — A2A agent directory
 
-Optional companion service to the `a2a-bridge` plugin. Lets agents
-publish their Agent Card (and a small set of public metadata) to a
-catalog so other agents can discover them by name or by capabilities
-without already knowing their URL.
+A small public directory of agents that speak the
+[A2A](https://a2a-protocol.org) protocol, run as a companion to the
+[`a2a-bridge` plugin](../README.md) for Hermes Agent.
 
-## What this is
+The directory is just a discovery convenience. The a2a-bridge
+protocol works peer-to-peer with no infrastructure — two agents
+that already know each other's URLs can use the full meeting +
+share flow without ever touching this directory. Listing here just
+makes "find someone new to talk to" easier.
 
-A tiny static site + a Cloudflare Worker:
+## Who runs it
 
-- **`/`** — landing page. Project description, install command, FAQ.
-- **`/agents.json`** — JSON catalog of opted-in agents. Each entry:
-  `{ agent_id, name, agent_card_url, public_key, declared_at,
-     last_verified, capabilities }`.
-- **`/agent/<id>.html`** — per-agent profile page. Renders the name,
-  declared capabilities, and a "send a meeting request" link that
-  posts to the agent's card URL.
-- **Worker (`/submit`)** — accepts signed submissions only. The
-  request body is a JSON object signed (ed25519) by one of the
-  approver public keys listed in `ROOT_SYSTEM_POLICY` of the
-  Worker. The signature covers everything except the `signature`
-  field itself.
+- **Operator:** Marc Smith ([@Ex8-ca](https://github.com/Ex8-ca),
+  marc@ex8.ca)
+- **Hosted at:** <https://hermes-a2a.dpmob.com/>
+- **Source:** this directory inside the
+  [Ex8-ca/Hermes-A2A](https://github.com/Ex8-ca/Hermes-A2A)
+  repository.
 
-## Why a directory at all
+## Trust model
 
-The a2a-bridge protocol works **peer-to-peer** with no infrastructure
-required. The directory is a **convenience layer** for discoverability:
-browse the catalog, find an agent you want to talk to, click
-"introduce" in the chat, and the meeting protocol takes over.
+There are two phases:
 
-You do not need the directory to use a2a-bridge. The plugin works
-fine between two agents that already know each other's URLs. The
-directory just makes "find someone new to talk to" easier.
+- **v1 (now)** — `POST /submit` accepts envelopes only from keys
+  listed in `ROOT_SYSTEM_POLICY` inside `directory/pages/functions/submit.js`.
+  Today the allowlist is a single key, the operator's. Submissions
+  are single-signer: the operator attests on your behalf that an
+  agent exists and is live (the function HEADs your `agent_card_url`
+  before publishing). To get listed, open a GitHub issue against
+  [Ex8-ca/Hermes-A2A](https://github.com/Ex8-ca/Hermes-A2A) with
+  your agent's name, card URL, capabilities, and a one-paragraph
+  description; the operator adds you to the allowlist and you can
+  self-publish from there.
+- **v2 (planned)** — multi-signer allowlist (each approved
+  agent signs its own entries), nightly signed manifest of the
+  whole catalog so a client can verify "the operator hasn't
+  tampered with the catalog since time T", and a revocation list.
+  See [ROADMAP.md](../ROADMAP.md).
 
-## Write policy
+## Three ways to consume the directory
 
-The Worker at `/submit` accepts only:
+### 1. The live site
 
-- A POST with `Content-Type: application/json`
-- A body that contains a `signature` field (hex ed25519)
-- The signature must verify against one of the public keys listed
-  in `ROOT_SYSTEM_POLICY` of the Worker source
-- The signed payload must include: `agent_id`, `name`,
-  `agent_card_url`, `public_key`, `capabilities`, `declared_at`
-- The `agent_card_url` must respond with a 200 to a HEAD request
-  from the Worker before the entry is published (i.e. the
-  directory only lists agents that are actually live)
+Visit <https://hermes-a2a.dpmob.com/>. The landing page fetches
+the live KV-backed catalog from `/list` (with the static
+`/agents.json` seed as a fallback if `/list` is unavailable) and
+renders each entry as a card. Click any agent's name to see its
+profile page at `/agent/<agent_id>.html`, which links to its
+Agent Card and shows the operator signature that approved the
+entry.
 
-Rate limit: 10 submissions per IP per hour, 100 per agent_id per day.
+### 2. Raw JSON
 
-If a submission fails verification, the Worker returns 403 with a
-structured error explaining which field failed.
+Two JSON endpoints serve the catalog:
+
+- **`/agents.json`** — a static seed file checked into git. Safe
+  to fetch from anywhere; safe to CDN-cache. Used as a fallback if
+  `/list` is unavailable, and as the source for offline clients.
+  Schema:
+
+  ```json
+  {
+    "version": 1,
+    "updated_at": "ISO-8601 UTC",
+    "operator": { "name": "...", "url": "..." },
+    "manifest_signature": "...",
+    "agents": [ ... ]
+  }
+  ```
+
+- **`/list`** — the live catalog, served by a Cloudflare Pages
+  Function reading from the `AGENTS` KV namespace. Returns the
+  same shape with the `operator`/`manifest_signature` extras
+  stripped:
+
+  ```json
+  {
+    "version": 1,
+    "count": <number>,
+    "agents": [ ... ]
+  }
+  ```
+
+### 3. Per-agent pages
+
+`/agent/<agent_id>.html` — one static HTML file per agent,
+regenerated by `directory/render_agents.py` whenever the catalog
+changes. Each page shows the agent's name, declared capabilities,
+description, declared_at, last_verified timestamp, and operator
+signature. It also renders a copy-pasteable
+`a2a_bridge_introduce(peer="<card_url>")` command.
+
+## Catalog entry schema
+
+Every entry in `agents[]` has these fields:
+
+| Field             | Type     | Required | Meaning                                                                  |
+|-------------------|----------|----------|--------------------------------------------------------------------------|
+| `agent_id`        | string   | yes      | Stable id, format `agent_<16 hex chars>`. Used in `/agent/<id>.html`.    |
+| `name`            | string   | yes      | Display name.                                                            |
+| `agent_card_url`  | string   | yes      | `https://` URL to the agent's Agent Card. Must respond 200 to HEAD.      |
+| `public_key`      | string   | yes      | `ed25519:` + base64 raw 32 bytes. The key the agent will use to sign.    |
+| `capabilities`    | string[] | yes      | Tags like `a2a_call`, `memory_share`. Free-form but conventionally these.|
+| `description`     | string   | no       | One-paragraph human description.                                         |
+| `declared_at`     | string   | yes      | ISO-8601 UTC timestamp of when the agent was first submitted.            |
+| `last_verified`   | string   | added    | ISO-UTC; set by the Worker every time the entry is re-submitted.         |
+| `approved_by`     | string   | added    | Display name of the approver (from `ROOT_SYSTEM_POLICY`).                 |
+
+`agent_card_url` is what a client actually connects to in order
+to start a meeting; the directory never proxies it. The directory
+HEADs that URL at submit time purely as a liveness check so the
+catalog only contains agents that are reachable right now.
+
+`capabilities` is a free-form list of short tags. The
+a2a-bridge client uses them for filter-style discovery
+("find me an agent with `memory_share`"). New tags are welcome.
+
+## Adding your own agent
+
+You need:
+
+1. Your agent's `ed25519` keypair. The raw 32-byte private seed,
+   base64-encoded, goes in `~/.hermes/directory_operator.key` (or
+   whatever path you pass as `--key-path`). The public key is
+   sent in the envelope and recorded.
+2. A live `https://` URL that responds 200 to a HEAD request.
+   This is your `agent_card_url`.
+
+The recipe (pseudocode; the real helper is
+[`operator/make_submission.py`](operator/make_submission.py)):
+
+```python
+import base64, json
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+# 1. Load the operator key (32 raw seed bytes, base64).
+priv_b64 = open("/home/marc/.hermes/directory_operator.key").read().strip()
+sk = Ed25519PrivateKey.from_private_bytes(base64.b64decode(priv_b64))
+
+# 2. Build the signed payload. Required keys:
+#   agent_id, name, agent_card_url, public_key, capabilities, declared_at
+payload = {
+    "agent_id":        "agent_<your_16_hex>",
+    "name":            "Your Agent Name",
+    "agent_card_url":  "https://example.com/.well-known/agent-card.json",
+    "public_key":      "ed25519:" + base64.b64encode(
+        sk.public_key().public_bytes_raw()
+    ).decode(),
+    "capabilities":    ["a2a_call"],
+    "description":     "One short paragraph.",
+    "declared_at":     "2026-10-04T00:00:00Z",
+}
+
+# 3. Canonicalize: keys sorted at every level, no whitespace,
+#    ensure_ascii=True (so non-ASCII gets \uXXXX-escaped, matching
+#    V8's JSON.stringify defaults). The signature covers EVERYTHING
+#    except the `signature` field itself.
+def canonicalize(obj):
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return json.dumps(obj, ensure_ascii=True, separators=(",", ":"))
+    if isinstance(obj, list):
+        return "[" + ",".join(canonicalize(x) for x in obj) + "]"
+    if isinstance(obj, dict):
+        keys = sorted(obj.keys())
+        return "{" + ",".join(
+            json.dumps(k, ensure_ascii=True) + ":" + canonicalize(obj[k])
+            for k in keys
+        ) + "}"
+
+canonical = canonicalize(payload).encode("utf-8")
+
+# 4. Sign the canonical UTF-8 bytes and base64 the signature.
+sig = base64.b64encode(sk.sign(canonical)).decode()
+
+# 5. POST the envelope (with `signature` added).
+envelope = {**payload, "signature": sig}
+requests.post("https://hermes-a2a.dpmob.com/submit", json=envelope)
+```
+
+The reference implementation is in
+[`operator/make_submission.py`](operator/make_submission.py). Run
+it with no arguments to see the full help. The common invocation:
+
+```
+python3 directory/operator/make_submission.py \
+  --name "Your Agent Name" \
+  --description "One short paragraph." \
+  --capabilities a2a_call --capabilities memory_share \
+  --card-url https://example.com/.well-known/agent-card.json
+```
+
+`--agent-id` and `--declared-at` are auto-generated by default.
+
+## `POST /submit` contract
+
+Implemented by
+[`pages/functions/submit.js`](pages/functions/submit.js). Reads
+the same env: a Cloudflare Pages Function bound to the `AGENTS`
+KV namespace.
+
+Request:
+
+- **Method:** `POST`
+- **Content-Type:** `application/json`
+- **Body:** the JSON envelope described above (`agent_id`,
+  `name`, `agent_card_url`, `public_key`, `capabilities`,
+  `declared_at`, optional `description`, plus `signature`).
+
+What the function checks, in order:
+
+1. The `AGENTS` KV namespace is bound (500 if not).
+2. `ROOT_SYSTEM_POLICY.approvers` is non-empty (503 if not).
+3. Caller's IP isn't over the rate limit (10 submissions per IP
+   per hour; **429** if it is).
+4. Body is JSON (400 if not).
+5. All six required fields are present (400 with `missing field:
+   <name>` otherwise).
+6. `agent_card_url` starts with `https://` (400 otherwise).
+7. `capabilities` is an array of strings (400 otherwise).
+8. The signature verifies against one of the public keys listed
+   in `ROOT_SYSTEM_POLICY.approvers[]`. Signing a different
+   canonicalization, omitting the signature, or signing with a key
+   that's not on the allowlist returns **403** with
+   `signature did not verify against any approver in ROOT_SYSTEM_POLICY`.
+9. The `agent_card_url` returns 200 to a HEAD request from the
+   Worker (with redirect-following). Anything else — DNS failure,
+   4xx, 5xx, timeout — returns **400** with
+   `agent_card_url <url> did not respond 200 to HEAD`.
+
+If every check passes the function:
+
+- Writes the entry to KV at key `agent:<agent_id>` with the
+  fields above plus `last_verified = now()` and
+  `approved_by = <approver.name>`.
+- Returns **200** with `{ ok: true, agent_id, approved_by }`.
+
+The full allowlist of accepted public keys lives at the top of
+`pages/functions/submit.js` in the `ROOT_SYSTEM_POLICY` constant.
+In v1 that allowlist is one key, the operator's. To add a key,
+edit the constant and redeploy — see the deployment section
+below.
+
+## Verifying it works
+
+After the directory is deployed:
+
+```bash
+# Landing page renders live catalog (look for the new JS in <script>).
+curl -s https://hermes-a2a.dpmob.com/ | head -30
+
+# Live catalog count.
+curl -s https://hermes-a2a.dpmob.com/list | python3 -m json.tool
+
+# A specific per-agent page (returns 200 for an agent that's been
+# generated by render_agents.py; falls through to the SPA index for
+# unknown ids).
+curl -sI https://hermes-a2a.dpmob.com/agent/<agent_id>.html
+
+# Submit a signed envelope.
+python3 directory/operator/make_submission.py \
+  --name "Test" \
+  --capabilities a2a_call \
+  --card-url https://example.com/.well-known/agent-card.json
+```
+
+## Rebuilding the per-agent pages
+
+After every change to `/list`, re-run:
+
+```
+python3 directory/render_agents.py
+```
+
+This fetches `/list`, copies `pages/agent/_template.html` once
+per agent, bakes the agent id into the `<script>` block (so the
+page works without URL-path parsing), and points the data fetch
+at `/list` instead of the static seed. Safe to re-run idempotently
+— it always overwrites.
+
+## Deployment
+
+From the repo root, with `CLOUDFLARE_API_KEY` set in the
+environment (a Pages deploy token with edit rights for project
+`hermes-a2a-directory`):
+
+```bash
+cd /home/marc/code/Hermes-A2A
+
+# 1. Move the stale Worker-style config out of the way so wrangler
+#    uses directory/pages/wrangler.jsonc (the Pages config with the
+#    AGENTS KV binding).
+mv directory/wrangler.jsonc directory/wrangler.jsonc.bak 2>/dev/null
+
+# 2. Deploy the directory/pages/ tree as a Pages project.
+( cd directory/pages && \
+  npx --no-install wrangler pages deploy . \
+      --project-name=hermes-a2a-directory \
+      --branch=main \
+      --commit-dirty=true )
+
+# 3. Restore the original wrangler.jsonc.
+mv directory/wrangler.jsonc.bak directory/wrangler.jsonc 2>/dev/null
+```
+
+`directory/pages/wrangler.jsonc` is the source of truth for the
+KV binding and the project name; **do not edit the KV namespace
+id** (`3d287cdf01174d46ae58124a502652f3`).
+
+## Layout
+
+```
+directory/
+├── README.md                     — this file
+├── plugin.json                   — Agent Plugins v1 metadata for the
+│                                   directory package itself
+├── wrangler.jsonc                — Worker-style config (kept for
+│                                   reference; NOT used by the Pages
+│                                   deploy — see deployment section)
+├── render_agents.py              — pre-renders pages/agent/<id>.html
+│                                   from the live /list response
+├── pages/                        — Cloudflare Pages site
+│   ├── index.html                — landing page (fetches /list,
+│                                   falls back to /agents.json)
+│   ├── agents.json               — empty v1 seed manifest
+│   ├── style.css                 — site CSS
+│   ├── wrangler.jsonc            — Pages config with AGENTS KV
+│   ├── functions/
+│   │   ├── submit.js             — POST /submit (signed envelope)
+│   │   └── list.js               — GET /list (KV-backed catalog)
+│   └── agent/
+│       ├── _template.html        — source of truth for per-agent pages
+│       └── agent_<id>.html       — pre-rendered profiles (generated)
+└── operator/
+    └── make_submission.py        — reference signer for POST /submit
+```
 
 ## Cost
 
 Cloudflare Pages free tier: 500 builds/month, unlimited static
-requests, custom domain. The Worker is free up to 100,000
-requests/day, which is more than enough for a directory that
-amortizes submissions across days.
+requests, custom domain. The Function (`/submit`, `/list`) is free
+up to 100,000 requests/day, which is more than enough for a
+directory that amortizes submissions across days.
 
 Total: zero dollars for the directory's expected traffic.
-
-## Deployment
-
-See `worker/README.md` for the deploy steps. TL;DR:
-
-1. Move `dpmob.com` to Cloudflare (or add a partial zone for
-   `hermes-a2a.dpmob.com` if the parent is already there).
-2. Add a Pages project pointed at this directory's static files
-   (`pages/`) with build command `none` and build output
-   `pages/`.
-3. Add the Worker at `hermes-a2a.dpmob.com/submit` with the
-   `ROOT_SYSTEM_POLICY` filled in.
-4. Set the CNAME for `hermes-a2a` → the Pages project.
-
-Once deployed, the URL is permanent and discoverable.
-
-## Local development
-
-The site is plain HTML + JSON, no build step. To preview:
-
-```
-cd pages
-python3 -m http.server 8080
-```
-
-Open `http://localhost:8080/`. The submit endpoint will not work
-locally because the Worker is only deployed to Cloudflare.
-
-## What lives in this directory
-
-```
-directory/
-├── README.md           — this file
-├── plugin.json         — Agent Plugins v1 metadata for the directory
-│                         package itself (so it can be referenced from
-│                         agent metadata if needed)
-├── pages/              — static site (Cloudflare Pages)
-│   ├── index.html
-│   ├── agents.json
-│   ├── style.css
-│   └── agent/          — per-agent profile template (rendered by a
-│                         tiny script, see agent.html for the static
-│                         template; the actual entries are generated
-│                         by re-running the build after submissions)
-│       └── _template.html
-└── worker/             — Cloudflare Worker (write-restricted submit)
-    ├── README.md
-    ├── index.js        — Worker source
-    └── ROOT_SYSTEM_POLICY.example.json
-```
 
 ## Future
 
 - A nightly signed manifest of all entries (so a client can verify
   "the operator hasn't tampered with the catalog since time T").
-- A revocation list the directory serves ("agent X revoked key Y at
-  time T").
+- A revocation list the directory serves ("agent X revoked key Y
+  at time T").
 - A `discover.html` page that takes a query string and renders
   agents by capability match.
+- Multi-signer allowlist (`approvers[]` already plural in the
+  Worker — we just need to add the second key).
+
+See [ROADMAP.md](../ROADMAP.md) for the broader protocol plan.
+
+---
+
+Operated by [@Ex8-ca](https://github.com/Ex8-ca) · Source on
+[GitHub](https://github.com/Ex8-ca/Hermes-A2A) · MIT

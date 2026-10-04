@@ -109,47 +109,60 @@ hermes plugins enable a2a_bridge</code></pre>
   </footer>
 
   <script>
-    // Render the agent list client-side. The catalog is a single
-    // JSON file served from /agents.json; we fetch and format it.
-    fetch("/agents.json")
+    // Render the agent list client-side. We try the live /list
+    // endpoint (KV-backed) first and fall back to the static
+    // /agents.json seed if /list is unavailable. Both shapes are
+    // { agents: [...] }, so the rest of the renderer is identical.
+    function renderAgents(data) {
+      const agents = data.agents || [];
+      document.getElementById("count").textContent =
+        agents.length === 0
+          ? "No agents listed yet."
+          : agents.length + " agent" + (agents.length === 1 ? "" : "s") + " listed.";
+      const list = document.getElementById("agent-list");
+      list.innerHTML = "";
+      if (agents.length === 0) {
+        list.innerHTML = "<p>Be the first to list your agent.</p>";
+        return;
+      }
+      const ul = document.createElement("ul");
+      ul.className = "agents";
+      for (const a of agents) {
+        const li = document.createElement("li");
+        const link = document.createElement("a");
+        link.href = "/agent/" + a.agent_id + ".html";
+        link.textContent = a.name;
+        li.appendChild(link);
+        const cap = document.createElement("div");
+        cap.className = "cap";
+        cap.textContent = (a.capabilities || []).join(" · ");
+        li.appendChild(cap);
+        if (a.description) {
+          const d = document.createElement("div");
+          d.className = "desc";
+          d.textContent = a.description;
+          li.appendChild(d);
+        }
+        ul.appendChild(li);
+      }
+      list.appendChild(ul);
+    }
+
+    function showError(e) {
+      document.getElementById("agent-list").textContent =
+        "Could not load catalog: " + e;
+    }
+
+    // Try live first; fall back to static seed if /list is down.
+    fetch("/list")
       .then((r) => (r.ok ? r.json() : Promise.reject(r.statusText)))
-      .then((data) => {
-        const agents = data.agents || [];
-        document.getElementById("count").textContent =
-          agents.length === 0
-            ? "No agents listed yet."
-            : agents.length + " agent" + (agents.length === 1 ? "" : "s") + " listed.";
-        const list = document.getElementById("agent-list");
-        list.innerHTML = "";
-        if (agents.length === 0) {
-          list.innerHTML = "<p>Be the first to list your agent.</p>";
-          return;
-        }
-        const ul = document.createElement("ul");
-        ul.className = "agents";
-        for (const a of agents) {
-          const li = document.createElement("li");
-          const link = document.createElement("a");
-          link.href = "/agent/" + a.agent_id + ".html";
-          link.textContent = a.name;
-          li.appendChild(link);
-          const cap = document.createElement("div");
-          cap.className = "cap";
-          cap.textContent = (a.capabilities || []).join(" · ");
-          li.appendChild(cap);
-          if (a.description) {
-            const d = document.createElement("div");
-            d.className = "desc";
-            d.textContent = a.description;
-            li.appendChild(d);
-          }
-          ul.appendChild(li);
-        }
-        list.appendChild(ul);
-      })
+      .then(renderAgents)
       .catch((e) => {
-        document.getElementById("agent-list").textContent =
-          "Could not load catalog: " + e;
+        // Fallback: static seed. If even that fails, surface the error.
+        fetch("/agents.json")
+          .then((r) => (r.ok ? r.json() : Promise.reject(r.statusText)))
+          .then(renderAgents)
+          .catch(showError);
       });
   </script>
 </body>
