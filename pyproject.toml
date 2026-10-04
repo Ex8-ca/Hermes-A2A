@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hermes-a2a-bridge"
-version = "0.3.3"
+version = "0.3.4"
 description = "One-line inter-agent tasks over A2A — wraps the bundled Hermes A2A platform plugin's outbound tools with reply formatting, audit-log lookup, and an approval gate for sensitive tasks."
 readme = "README.md"
 license = {text = "MIT"}
@@ -54,12 +54,28 @@ Changelog = "https://github.com/Ex8-ca/Hermes-A2A/blob/main/CHANGELOG.md"
 # in place after `pip install` (or symlinked, see README).
 include-package-data = true
 
+[tool.setuptools.packages.find]
+# Only ship the Python plugin tree. The top-level `directory/` and `scripts/`
+# directories are NOT Python packages — `directory/` is a node/web frontend
+# that lives alongside the plugin source, and `scripts/` holds ops helpers.
+# Without this explicit constraint, setuptools' auto-discovery sees both
+# `plugins/` and `directory/` as top-level packages and refuses to build
+# (regression introduced when `directory/` was added in v0.2.0).
+include = ["plugins.*"]
+exclude = ["directory*", "scripts*"]
+
 [tool.setuptools.package-data]
 "plugins.a2a_bridge" = ["plugin.yaml", "README.md", "references/*.md"]
 "plugins.a2a_bridge.tests" = ["*.py"]
 "src" = ["hermes_a2a_bridge/py.typed"]
 
 [tool.pytest.ini_options]
+# Add repo root to sys.path so test files that do
+# `from plugins.a2a_bridge import ...` resolve without a project install.
+# CI deliberately does `pip install pytest` (not `pip install -e .`) because
+# the plugin is designed to be dropped in next to a Hermes runtime, not
+# installed site-wide.
+pythonpath = ["."]
 testpaths = ["src/hermes_a2a_bridge/tests", "plugins/a2a_bridge/tests", "directory/tests"]
 python_files = ["test_*.py", "*_test.py"]
 addopts = "-ra --strict-markers"
