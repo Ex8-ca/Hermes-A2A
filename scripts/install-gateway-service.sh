@@ -27,19 +27,7 @@ HERMES_AGENT="$HERMES_HOME/hermes-agent"
 SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 UNIT_NAME="hermes-a2a-gateway.service"
 UNIT_PATH="$SYSTEMD_USER_DIR/$UNIT_NAME"
-
-# Find the Python interpreter the desktop uses (matches `hermes` command).
-# The desktop's launcher picks a "tool" python under ~/.hermes/tools/ that has
-# all the deps installed; using the system python would miss them.
-PYTHON_BIN="$HERMES_HOME/tools/python-3.14.7+202****0901-linux-x64/bin/python3"
-if [ ! -x "$PYTHON_BIN" ]; then
-    # Fallback: any python3 on PATH that has hermes_cli installed
-    PYTHON_BIN="$(command -v python3)"
-    if [ -z "$PYTHON_BIN" ]; then
-        echo "ERROR: no python3 found" >&2
-        exit 1
-    fi
-fi
+WRAPPER_PATH="$HOME/.local/bin/run-hermes-gateway.sh"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 log() { echo "  $*"; }
@@ -67,6 +55,48 @@ if [ "${1:-}" = "--uninstall" ] || [ "${1:-}" = "-u" ]; then
     exit 0
 fi
 
+# ── Write the wrapper script ─────────────────────────────────────────────────
+# The wrapper handles picking the right Python interpreter under
+# ~/.hermes/tools/ — that directory name has special characters on some
+# installs (a literal `+` and `****`) which systemd refuses in ExecStart,
+# so we use a clean-path script instead of hardcoding the path.
+mkdir -p "$(dirname "$WRAPPER_PATH")"
+cat > "$WRAPPER_PATH" <<'WRAPPER_EOF'
+#!/usr/bin/env bash
+# run-hermes-gateway.sh — wrapper for the systemd service
+# Wraps `hermes gateway run` with the right Python interpreter and env.
+set -e
+export HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+export PYTHONPATH="$HERMES_HOME/hermes-agent"
+PYTHON_BIN="$(ls -td "$HERMES_HOME"/tools/python-*/bin/python3 2>/dev/null | head -1)"
+if [ -z "$PYTHON_BIN" ] || [ ! -x "$PYTHON_BIN" ]; then
+    echo "ERROR: no hermes-managed python3 found under $HERMES_HOME/tools/" >&2
+    exit 1
+fi
+# Run the gateway. If another gateway is already running, the per-profile
+# singleton gate inside `hermes gateway run` exits with status 75. That's
+# NOT a failure from systemd's point of view (the gateway is up, just not
+# via us), so map it to 0. Anything else passes through.
+set +e
+"$PYTHON_BIN" -I -c "
+import os, sys
+os.environ['HERMES_HOME'] = os.environ['HERMES_HOME']
+sys.path.insert(0, os.environ['PYTHONPATH'])
+from hermes_cli.main import main
+sys.argv = ['hermes', 'gateway', 'run']
+main()
+" < /dev/null
+rc=$?
+set -e
+if [ "$rc" -eq 75 ]; then
+    echo "Another gateway already serves default — leaving it running."
+    exit 0
+fi
+exit "$rc"
+WRAPPER_EOF
+chmod +x "$WRAPPER_PATH"
+ok "Wrapper written to $WRAPPER_PATH"
+
 # ── Write the unit file ──────────────────────────────────────────────────────
 echo "Installing $UNIT_NAME..."
 mkdir -p "$SYSTEMD_USER_DIR"
@@ -79,15 +109,24 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=oneshot
+RemainAfterExit=yes
 Environment="HERMES_HOME=$HERMES_HOME"
 Environment="PYTHONPATH=$HERMES_AGENT"
-ExecStart=$PYTHON_BIN -I -c "import os, sys; os.environ['HERMES_HOME']='$HERMES_HOME'; sys.path.insert(0, '$HERMES_AGENT'); from hermes_cli.main import main; sys.argv=['hermes','gateway','run']; main()"
-Restart=on-failure
-RestartSec=10
+ExecStart=$WRAPPER_PATH
 # Match the desktop's runtime env; the desktop strips PATH and re-sets
 # PYTHONPATH/PYTHONHOME so we do the same to avoid the venv mismatch that
-# breaks `ruamel.yaml` and similar deps.
+# breaks \`ruamel.yaml\` and similar deps.
+#
+# Type=oneshot + RemainAfterExit=yes means:
+#   - systemd runs the command at boot (and on first \`systemctl start\`)
+#   - the wrapper script maps the gateway's "another instance is running"
+#     exit code (75) to 0, so the service succeeds whether we start the
+#     gateway ourselves or find one already running (per-profile singleton)
+#   - we do NOT auto-restart on exit; the gateway is supposed to run until
+#     you stop it (systemctl --user stop). If it dies, the next service
+#     start (or a manual systemctl start) will replace it.
+TimeoutStartSec=45
 
 [Install]
 WantedBy=default.target
