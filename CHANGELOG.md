@@ -3,7 +3,7 @@
 All notable changes to Hermes-A2A are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased] — memex8 slice transport
+## [Unreleased]
 
 ### Added — Cross-agent memex8 memory sharing (v0.6.0)
 
@@ -34,10 +34,10 @@ receiver to refuse the whole slice.
   `memex8_memory_slice` envelope, and dispatches through the
   underlying a2a_call (with the existing approval gate).
 - **`a2a_bridge_receive_memex8(envelope, write_to)`** — receiver.
-  Verifies signature, cross-checks the envelope's public key against
-  the meeting record, re-fetches each memory from the sender's
-  memex8 base URL, re-validates `visibility=public`, then appends
-  to `write_to` (default `MEMORY.md`) with a provenance comment.
+  Verifies the signature, re-fetches each memory from the
+  sender's memex8 base URL, re-checks visibility=public, then
+  appends to `write_to` (default `MEMORY.md`) with a provenance
+  comment.
 
 **New module: `plugins/a2a_bridge/memex8_client.py`**
 
@@ -66,9 +66,7 @@ v1.2.0+ with the `visibility` field on `MemoryPoint`, the
 sender preflight will fail with "memex8 unreachable" and the
 discovery tool will return an empty list.
 
-## [Unreleased] — README + third-party demo
-
-### Added
+### Added — README + third-party demo
 
 - **`scripts/discovery_client_demo.py`** — a public-network
   third-party client demo. Hits `hermes-a2a.dpmob.com`, lists the
