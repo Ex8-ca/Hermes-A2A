@@ -3,6 +3,37 @@
 All notable changes to Hermes-A2A are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.2] — 2026-10-04
+
+### Changed — Directory landing page
+
+- **New landing-page design.** The flat 5-section page with 55 lines
+  of CSS is replaced with a chillygeek-faithful redesign: dark theme
+  (`--bg-primary: #0a0b0f`), Inter from Google Fonts, cyan→purple
+  gradient on focal points only, sticky header with gradient brand
+  mark, 4-card "Find the project" connect grid, 3-up agent card
+  grid with capability chips and verified dates, terminal-style
+  install block with the v0.3.1 command.
+- **Shared `/variant-list.js`** fetches `/list` (KV-backed), falls
+  back to `/agents.json` (static seed), and renders into
+  `<div id="agent-list" data-mode="...">`. The hero
+  `<span data-agent-count>` is updated from the same response so
+  each variant can show or hide the count without re-implementing
+  the fetch.
+- **Variants A, B, C** (`variant-{a,b,c}.html/css`) are checked in
+  for future reference. Variant A is promoted to `index.html` +
+  `style.css` and is live.
+
+### Notes
+
+- The plugin code, KV binding, `submit.js`, `list.js`, and
+  per-agent SSR pages are unchanged. The `/list` endpoint contract
+  is unchanged.
+- Slop audit (variant A): 1.5/10. Only the brief-mandated
+  cyan→purple gradient on the h1 word and primary button (tell 1)
+  and Inter as the body face (tell 9) score non-zero. No icon
+  toppers, no monument stats, no accent rails, no glassmorphism.
+
 ## [0.3.1] — 2026-10-04
 
 ### Fixed — Plugin install script
