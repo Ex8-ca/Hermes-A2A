@@ -396,6 +396,91 @@ into their deploy script. The fail-closed invariant: an empty
 allowlist would lock the directory out (submit.js refuses every
 submission); the CLI refuses to create that state.
 
+## Tailscale discoverability
+
+The directory's `submit.js` already accepts `http://<host>.ts.net:9900/...`
+URLs without a liveness probe (v0.3.3 added `*.ts.net` and the
+`100.64.0.0/10` CGNAT range to `isPrivateOrLoopbackHost()` in
+[`pages/functions/_validate.js`](pages/functions/_validate.js)). What
+was missing on the operator side was tooling to discover the local
+host's MagicDNS name and put it into `agent_card_url`.
+
+Two pieces ship in v0.4.0:
+
+- [`operator/discover_tailscale.py`](operator/discover_tailscale.py) —
+  a standalone helper that calls `tailscale status --json`, surfaces the
+  local host's MagicDNS name (`--self`), lists online peers
+  (`--peers`), or prints the filtered status as JSON (`--json`). It
+  also refreshes a small mode-0600 cache at
+  `~/.hermes/.tailscale-cache.json` (`--refresh-cache`).
+- [`operator/make_submission.py`](operator/make_submission.py) gains
+  `--auto-tailscale`, which uses `discover_tailscale.py --self` to
+  pre-fill `agent_card_url` with the local MagicDNS URL. The
+  operator's local `tailscaled` is the source of truth for the
+  hostname, so this requires Tailscale to be installed and logged in.
+
+The typical flow on a host that already has Tailscale running:
+
+```
+python3 directory/operator/make_submission.py \
+  --auto-tailscale \
+  --name "my agent" \
+  --capabilities a2a_call
+```
+
+This produces an envelope with
+`agent_card_url = "http://my-host.taila6e2e.ts.net:9900/.well-known/agent-card.json"`
+and the operator's signature over the canonical JSON. The directory's
+`submit.js` accepts the URL (no liveness probe — see v0.3.3 note
+above), so the live `/list` picks it up immediately.
+
+If `--name` is omitted, `--auto-tailscale` defaults it to
+`<host> (operator)` so the catalog's provenance is obvious. Pass
+`--name "..."` explicitly to override. If `--card-url` is set
+explicitly, it wins over `--auto-tailscale` (a stderr warning notes
+the conflict). Use `--port N` to override the default 9900 (useful
+when the gateway runs on a non-standard port, e.g. for testing):
+
+```
+python3 directory/operator/make_submission.py \
+  --auto-tailscale --port 8888 \
+  --capabilities a2a_call
+```
+
+`discover_tailscale.py` is standalone — run it directly to see the
+local MagicDNS name or the peer list, no `make_submission.py` required:
+
+```
+$ python3 directory/operator/discover_tailscale.py
+self:    minisforum-desktop.taila6e2e.ts.net  (minisforum-desktop, linux, online=yes)
+tailnet: taila6e2e.ts.net
+peers:   6 online, 10 offline, 16 total
+
+$ python3 directory/operator/discover_tailscale.py --self
+minisforum-desktop.taila6e2e.ts.net
+
+$ python3 directory/operator/discover_tailscale.py --peers
+ai5080.taila6e2e.ts.net                   100.117.6.105    linux     online
+ai8.taila6e2e.ts.net                      100.115.70.105   linux     online
+...
+```
+
+### Troubleshooting
+
+- **`tailscale` not found on PATH.** Install it (Arch/Omarchy:
+  `sudo pacman -S tailscale`), then `sudo tailscale up` to authenticate
+  the host. The current operator's tailscale is already installed on
+  `.2` and `.3` (and on every other host in the tailnet); this matters
+  for *new* hosts.
+- **Operator on a host with no MagicDNS name.** `tailscale status --json`
+  returns a `Self.DNSName` for every host that's authenticated. If
+  `--self` returns nothing, the host hasn't completed `tailscale up`.
+- **`tailscaled` hung.** `discover_tailscale.py` gives up after a
+  5-second timeout and prints a clear error. Restart tailscaled with
+  `sudo systemctl restart tailscaled` and retry.
+- **Wrong port.** The gateway listens on 9900 by default. If the
+  operator moved it (e.g. for testing), pass `--port N`.
+
 ## Layout
 
 ```
@@ -422,6 +507,8 @@ directory/
 │       └── agent_<id>.html       — pre-rendered profiles (generated)
 └── operator/
     ├── make_submission.py        — reference signer for POST /submit
+    ├── discover_tailscale.py     — operator helper for MagicDNS names
+    ├── delete_entry.py           — signed deletion CLI (v0.3.3)
     └── policy_rotate.py          — manage ROOT_SYSTEM_POLICY approvers
 ```
 

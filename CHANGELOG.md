@@ -3,6 +3,66 @@
 All notable changes to Hermes-A2A are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.0] — 2026-10-04
+
+### Added — Tailscale discoverability for the directory
+
+- **`directory/operator/discover_tailscale.py`** — a standalone helper
+  that calls `tailscale status --json` and surfaces the operator's
+  local MagicDNS name (`--self`), the online peer list (`--peers`),
+  the filtered status as JSON (`--json`), or refreshes a small
+  mode-0600 cache at `~/.hermes/.tailscale-cache.json`
+  (`--refresh-cache`). Standard library only; no new dependencies.
+  Handles `tailscale` missing from PATH, non-zero exits, timeouts,
+  and unparsable JSON with clear errors.
+- **`make_submission.py --auto-tailscale`** — new flag on the
+  existing submitter that uses `discover_tailscale.py --self` to
+  pre-fill `agent_card_url` with the host's MagicDNS URL. Precedence:
+    * `--card-url` explicit > `--auto-tailscale` (the explicit URL wins,
+      a stderr warning notes the conflict).
+    * `--name` explicit > `--auto-tailscale` (auto-fill is silent
+      when `--name` was passed).
+    * `--name` omitted with `--auto-tailscale`: defaults to
+      `<host> (operator)`.
+  Use `--port N` to override the default 9900 in the auto-built URL.
+  Requires `--name` (existing behavior) unless `--auto-tailscale`
+  supplies the default.
+
+### Tests
+
+- 12 new tests in
+  `directory/operator/tests/test_discover_tailscale.py` cover
+  tailscale-missing / non-zero / invalid-JSON paths plus the four
+  output modes (`--self`, `--peers`, `--json`, `--refresh-cache`) and
+  the online/offline peer split.
+- 1 new test in
+  `directory/operator/tests/test_make_submission_tailscale.py`
+  exercises the full precedence matrix of `--auto-tailscale` end-to-end
+  (auto-fill happy path, explicit URL wins, explicit name wins,
+  `--port` override, error path).
+
+Total Python tests: 25 (was 12). Plugin (201) and directory Node
+(43) test counts unchanged.
+
+### Docs
+
+- New "Tailscale discoverability" section in `directory/README.md`
+  documents the operator flow, the `--port` option, the standalone
+  `discover_tailscale.py` CLI, and a troubleshooting subsection
+  (tailscale not on PATH, host not authenticated, tailscaled hung).
+- `make_submission.py` module docstring extended with a `--auto-tailscale`
+  example.
+
+### Notes
+
+- The directory-side change for `*.ts.net` URLs (no liveness probe,
+  `isPrivateOrLoopbackHost()` extension) shipped in v0.3.3. v0.4.0
+  is the operator-side tooling to actually use that path.
+- The two live entries (`desktop_2`, `ai5080`) still use their LAN
+  `agent_card_url`s (`http://192.168.1.{2,3}:9900/...`) — switching
+  them to MagicDNS URLs is a separate manual decision the operator
+  makes after reviewing v0.4.0.
+
 ## [0.3.3] — 2026-10-04
 
 ### Added — Directory deletion path

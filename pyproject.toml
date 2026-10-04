@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hermes-a2a-bridge"
-version = "0.3.3"
+version = "0.4.0"
 description = "One-line inter-agent tasks over A2A — wraps the bundled Hermes A2A platform plugin's outbound tools with reply formatting, audit-log lookup, and an approval gate for sensitive tasks."
 readme = "README.md"
 license = {text = "MIT"}

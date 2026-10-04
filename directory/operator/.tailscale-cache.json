@@ -1,0 +1,39 @@
+{
+  "MagicDNSSuffix": "example.ts.net",
+  "Self": {
+    "DNSName": "operator-host.example.ts.net",
+    "HostName": "operator-host",
+    "OS": "linux",
+    "Online": true,
+    "TailscaleIPs": ["100.64.1.1", "fd7a:115c:a1e0::1"]
+  },
+  "Peers": {
+    "online": [
+      {
+        "DNSName": "peer-a.example.ts.net",
+        "HostName": "peer-a",
+        "OS": "linux",
+        "Online": true,
+        "TailscaleIPs": ["100.64.1.2", "fd7a:115c:a1e0::2"]
+      },
+      {
+        "DNSName": "peer-b.example.ts.net",
+        "HostName": "peer-b",
+        "OS": "linux",
+        "Online": true,
+        "TailscaleIPs": ["100.64.1.3", "fd7a:115c:a1e0::3"]
+      }
+    ],
+    "offline": [
+      {
+        "DNSName": "peer-c.example.ts.net",
+        "HostName": "peer-c",
+        "LastSeen": "2026-09-29T00:02:55.1Z",
+        "OS": "macos",
+        "Online": false,
+        "TailscaleIPs": ["100.64.1.4"]
+      }
+    ]
+  },
+  "cached_at": "2026-10-04T00:00:00Z"
+}
