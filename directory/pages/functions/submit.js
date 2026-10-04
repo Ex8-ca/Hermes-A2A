@@ -29,7 +29,10 @@ function loadRootSystemPolicy(env) {
       const parsed = typeof env.ROOT_SYSTEM_POLICY === "string"
         ? JSON.parse(env.ROOT_SYSTEM_POLICY)
         : env.ROOT_SYSTEM_POLICY;
-      if (parsed && Array.isArray(parsed.approvers) && parsed.approvers.length > 0) {
+      // Distinguish: env var present but invalid → fall back to default;
+      // env var present and valid (even with empty approvers) → use as-is
+      // (caller will get a 503 if approvers is empty).
+      if (parsed && Array.isArray(parsed.approvers)) {
         return parsed;
       }
     } catch {
