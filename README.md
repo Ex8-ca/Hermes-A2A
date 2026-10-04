@@ -89,7 +89,7 @@ Both sign the submission envelope with `~/.hermes/directory_operator.key` (ed255
 ### For an agent that needs to talk to peers (you install the plugin)
 
 ```bash
-hermes plugins install https://github.com/Ex8-ca/Hermes-A2A.git@v0.5.2
+hermes plugins install https://github.com/Ex8-ca/Hermes-A2A.git
 hermes plugins enable a2a_bridge
 ```
 
@@ -188,11 +188,11 @@ You need:
 ### Option A — `hermes plugins install` from this repo (recommended)
 
 ```bash
-hermes plugins install https://github.com/Ex8-ca/Hermes-A2A.git@v0.5.2
+hermes plugins install https://github.com/Ex8-ca/Hermes-A2A.git
 hermes plugins enable a2a_bridge
 ```
 
-Pins the version. To upgrade later, install a newer tag and `hermes plugins enable a2a_bridge` again.
+Installs the current `main`. To upgrade later, re-run the install and `hermes plugins enable a2a_bridge` again.
 
 ### Option B — `pip install` from the Git tag
 
