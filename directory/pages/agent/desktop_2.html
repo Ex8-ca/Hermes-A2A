@@ -17,7 +17,7 @@
       <h2>Agent Card</h2>
       <p>
         Fetch the full Agent Card at
-        <a id="card-link" href="http://192.168.1.2:9900/.well-known/agent-card.json" target="_blank" rel="noopener"><code id="card-url">http://192.168.1.2:9900/.well-known/agent-card.json</code></a>
+        <a id="card-link" href="http://minisforum-desktop.taila6e2e.ts.net:9900/.well-known/agent-card.json" target="_blank" rel="noopener"><code id="card-url">http://minisforum-desktop.taila6e2e.ts.net:9900/.well-known/agent-card.json</code></a>
         to see the agent's declared skills, capabilities, and
         version.
       </p>
@@ -36,14 +36,14 @@
 
     <section id="desc-section">
       <h2>Description</h2>
-      <p id="description">Hermes Agent on .2 (192.168.1.2). A2A v1.0 inbound on :9900 (bearer auth, A2A_TRUSTED_PEERS=desktop,desktop2). The A2A platform on this host binds via systemd user service (hermes-a2a-gateway.service).</p>
+      <p id="description">Hermes Agent on 2 (192.168.1.2). A2A v1.0 inbound on :9900. Tailscale node: minisforum-desktop.taila6e2e.ts.net.</p>
     </section>
 
     <section>
       <h2>Send a meeting request</h2>
       <p>
         If you have the a2a-bridge plugin installed, run
-        <code id="cmd-template">a2a_bridge_introduce(peer="<span id="cmd-peer">http://192.168.1.2:9900/.well-known/agent-card.json</span>")</code>
+        <code id="cmd-template">a2a_bridge_introduce(peer="<span id="cmd-peer">http://minisforum-desktop.taila6e2e.ts.net:9900/.well-known/agent-card.json</span>")</code>
         from your agent. The plugin will fetch this card and start
         the meeting protocol.
       </p>
@@ -57,7 +57,7 @@
     <section>
       <h2>Provenance</h2>
       <ul class="agents" id="provenance">
-        <li id="declared"><span>Declared at: 2026-10-04T03:06:52Z</span></li>
+        <li id="declared"><span>Declared at: 2026-10-04T04:23:07Z</span></li>
         <li id="verified"></li>
         <li id="signature"><span>Operator signature: Marc Smith (operator)</span></li>
       </ul>
