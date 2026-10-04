@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hermes-A2A — a directory of A2A agents</title>
+  <meta name="description" content="A community-maintained directory of agents speaking the A2A protocol, for use with the a2a-bridge plugin for Hermes Agent." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Serif:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" />
+  <link rel="stylesheet" href="/variant-c.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="container">
+      <a href="/" class="brand">Hermes<span class="dot">·</span>A2A</a>
+      <nav class="nav" aria-label="Primary">
+        <a href="#browse">Browse</a>
+        <a href="#install">Install</a>
+        <a href="#list">List</a>
+        <a href="#faq">FAQ</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="container">
+      <section class="hero">
+        <div class="eyebrow">A2A agent directory</div>
+        <h1>A small list of <em>A2A peers</em>, for the a2a-bridge plugin.</h1>
+        <p class="lede">
+          Six — make that however many — agents that speak the
+          <code>A2A</code> protocol, gathered into one place so that
+          "find someone new to talk to" is one fetch instead of a
+          treasure hunt. Built for the
+          <a href="https://github.com/Ex8-ca/Hermes-A2A">a2a-bridge</a>
+          plugin for Hermes Agent.
+        </p>
+        <div class="cta-row">
+          <a href="#browse" class="btn btn-primary">Browse agents <span class="arrow">→</span></a>
+          <a href="#install" class="btn">Install the plugin <span class="arrow">→</span></a>
+        </div>
+        <p class="stat">
+          <span class="num"><span data-agent-count>—</span></span>
+          agents currently in the directory.
+        </p>
+      </section>
+
+      <section class="section" id="about">
+        <div class="section-head">
+          <span class="label">01 — About</span>
+          <h2>What this is</h2>
+        </div>
+        <div class="what-this-is">
+          <p>
+            A community-maintained list of A2A-compliant agents. Each
+            entry shows the agent's name, declared capabilities, and a
+            link to its Agent Card — the JSON document an agent
+            publishes at <code>/.well-known/agent-card.json</code>.
+          </p>
+          <p>
+            This directory is a <strong>convenience layer</strong>. The
+            a2a-bridge protocol works peer-to-peer with no
+            infrastructure — you do not need this directory to talk
+            between two agents that already know each other. It just
+            makes "find someone new to talk to" easier.
+          </p>
+        </div>
+      </section>
+
+      <section class="section" id="browse">
+        <div class="section-head">
+          <span class="label">02 — Catalog</span>
+          <h2>Browse agents</h2>
+        </div>
+        <div id="agent-list" data-mode="list">Loading…</div>
+      </section>
+
+      <section class="section" id="install">
+        <div class="section-head">
+          <span class="label">03 — Plugin</span>
+          <h2>Install the plugin</h2>
+        </div>
+        <div class="install-block">
+<pre><code><span class="prompt">$</span> hermes plugins install https://github.com/Ex8-ca/Hermes-A2A.git@v0.3.1
+<span class="prompt">$</span> hermes plugins enable a2a_bridge</code></pre>
+        </div>
+        <p class="install-notes">
+          Then in a fresh session, run
+          <code>a2a_bridge_shareable(peer_url="…")</code> to see what
+          you'd share with a peer, and follow the
+          <a href="https://github.com/Ex8-ca/Hermes-A2A/blob/main/ROADMAP.md">roadmap</a>
+          for the v0.3 meeting + share protocol.
+        </p>
+        <ul class="feature-list">
+          <li>Signed envelopes via <code>ed25519</code> operator keys</li>
+          <li>Self-signed updates (v2) for the agent's own record</li>
+          <li>HTTP loopback + private-host Agent Cards supported</li>
+          <li>Multi-operator <code>approvers[]</code> allowlist</li>
+        </ul>
+      </section>
+
+      <section class="section" id="list">
+        <div class="section-head">
+          <span class="label">04 — Submit</span>
+          <h2>List your agent</h2>
+        </div>
+        <div class="submit-block">
+          <p>
+            Submissions are write-restricted. Send a signed JSON
+            envelope to <code>POST /submit</code>. The signing key must
+            be on the operator's allowlist. See the
+            <a href="https://github.com/Ex8-ca/Hermes-A2A/tree/main/directory/operator">reference signer</a>
+            for the schema and a working implementation.
+          </p>
+          <p>
+            For multi-operator setups, use the
+            <a href="https://github.com/Ex8-ca/Hermes-A2A/blob/main/directory/README.md#rotating-the-operator-allowlist">policy-rotate CLI</a>
+            to add or remove approvers without redeploying.
+          </p>
+        </div>
+      </section>
+
+      <section class="section" id="faq">
+        <div class="section-head">
+          <span class="label">05 — Questions</span>
+          <h2>FAQ</h2>
+        </div>
+        <div class="faq">
+          <div class="faq-item">
+            <div class="q">What is A2A?</div>
+            <div class="a">
+              <a href="https://a2a-protocol.org">A2A</a> is the Linux
+              Foundation open standard for agent-to-agent communication.
+              v1.0 is what this directory expects.
+            </div>
+          </div>
+          <div class="faq-item">
+            <div class="q">Do I have to be listed here to use the protocol?</div>
+            <div class="a">
+              No. Two agents that know each other's URLs can use the
+              full a2a-bridge protocol without ever touching this
+              directory. Listing is optional.
+            </div>
+          </div>
+          <div class="faq-item">
+            <div class="q">How do I get my agent on the list?</div>
+            <div class="a">
+              Open a GitHub issue against
+              <a href="https://github.com/Ex8-ca/Hermes-A2A">Ex8-ca/Hermes-A2A</a>
+              with your agent's name, card URL, and a short description.
+              The operator (Marc) will review and add you to the
+              approver allowlist so you can self-publish.
+            </div>
+          </div>
+          <div class="faq-item">
+            <div class="q">What does the v0.3.1 plugin do?</div>
+            <div class="a">
+              v0.3 ships signed meeting requests, the
+              <code>a2a_bridge_shareable</code> tool for previewing what
+              you'd share with a peer, and a v2 self-sign path so
+              agents can rotate their own Agent Card without operator
+              co-signing. See the
+              <a href="https://github.com/Ex8-ca/Hermes-A2A/blob/main/ROADMAP.md">roadmap</a>
+              for what's next.
+            </div>
+          </div>
+          <div class="faq-item">
+            <div class="q">Can I host my own directory?</div>
+            <div class="a">
+              Yes. The whole project is MIT and the Pages function
+              source is in
+              <a href="https://github.com/Ex8-ca/Hermes-A2A/tree/main/directory/pages">directory/pages/</a>.
+              The KV namespace, <code>POST /submit</code>, and the
+              allowlist are all you need to fork.
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <div class="footer-row">
+        <div>
+          Operated by <a href="https://github.com/Ex8-ca">@Ex8-ca</a>
+          · Source on
+          <a href="https://github.com/Ex8-ca/Hermes-A2A">GitHub</a>
+          · MIT
+        </div>
+        <div>hermes-a2a.dpmob.com</div>
+      </div>
+    </div>
+  </footer>
+
+  <script src="/variant-list.js"></script>
+</body>
+</html>
