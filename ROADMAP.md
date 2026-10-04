@@ -1,13 +1,14 @@
 # Roadmap to v0.2 — Public memories, public skills, agent identity
 
-This document describes the design we agreed on (2026-10-04) for cross-agent
-public sharing. It is **not implemented yet** — it's the plan that v0.2 will
-execute, and the foundation we lay in v0.1.x to make v0.2 a small step rather
-than a rewrite.
+**v0.2.0 SHIPPED 2026-10-04** (tag `v0.2.0`, commit `2fd2598`). This
+document is preserved as the design history for the v0.2 release —
+how we got there, what the alternatives were, and what's still
+immutable by design.
 
 The full discussion is preserved in the conversation log; this is the
 single-source-of-truth writeup so future contributors (including future-us)
-have a place to look.
+have a place to look. For the post-v0.2 work, see the v0.3 section
+at the bottom of this file.
 
 ## What we're building
 
@@ -235,3 +236,197 @@ Static hosting cost: zero (Cloudflare Pages free tier).
 - **Decentralized but with optional directory.** The protocol works
   peer-to-peer with no infrastructure. The directory is a convenience
   layer for discoverability, not a requirement.
+
+---
+
+# Roadmap to v0.3 — Real sharing, replay defense, and operator rotation
+
+This document tracks the open items below v0.2.0, prioritized for the
+next iteration. Each item has a one-line threat model, the change
+required, and a TDD test plan.
+
+## v0.2.0 shipped (recap)
+
+Plugin v0.2.0 (tag `v0.2.0`, commit `2fd2598`) is live on
+`github.com/Ex8-ca/Hermes-A2A`. It adds:
+
+- ed25519 identity layer (`keyring.py`, `~/.hermes/a2a_bridge/identity.key`)
+- Meeting protocol with consent TTL and unilateral revoke
+- Public-share tools (`share_public`, `receive_public`) with provenance
+- Two security fixes: approval-gate on outbound v0.2 paths, path-traversal
+  guard on `write_to`
+
+171 plugin tests pass. The e2e demo (`tests/e2e_demo.py`) stays on a
+detached branch because it mutates live state.
+
+The directory v2 (4 cycles, 35 tests) is independently live at
+https://hermes-a2a.dpmob.com/.
+
+## What's outstanding (prioritized)
+
+### 1. Real slice fetching in `share_public` (medium)
+
+**Today:** `handle_share_public` builds an envelope with a literal
+placeholder string. The receiver gets the envelope but the actual
+memory contents never travel. v0.3 needs to actually fetch the
+slice body (from a memory store the operator marks as public) and
+serialize it into the envelope before signing.
+
+**Changes required:**
+- `slice.py`: replace the placeholder with a real read of the
+  slice source. The source is currently a file path; v0.3 may
+  use the directory's public-marking (memory + skills) or a new
+  shared-memory abstraction.
+- `tools.py:handle_share_public`: read the slice via `slice.py`,
+  serialize into the envelope, then sign.
+- `tools.py:handle_receive_public`: deserialize the slice body
+  from the envelope (instead of treating `envelope` as a generic
+  blob) and write to the target with a `<!-- hermes:from=... -->
+  provenance` comment.
+
+**Threat model:** the slice source is gated by `policy.py`'s
+`public.yaml` allowlist. The share handler reads the source, signs
+the canonical bytes, and sends. A second-layer guard: the operator's
+approval gate is already in place from the v0.2 port.
+
+**TDD plan:**
+- `test_slice.py`: add a test that builds a real envelope from a
+  fixture file, parses it on the other end, and gets back the
+  exact bytes (XSS-checked).
+- `test_tools.py:TestV03SliceFetch`: integration test that
+  `handle_share_public` reads a fixture, signs, and `handle_receive_public`
+  writes it to a tmp file with the provenance comment.
+
+**Effort:** 1 cycle (~200 lines + tests). The biggest risk is the
+"what's a slice?" definition — v0.3 must commit to a serialization
+format. JSON-per-line (one memory item per line) is the simplest;
+YAML is overkill.
+
+### 2. Replay protection on signed envelopes (medium)
+
+**Today:** `parse_envelope` and `parse_incoming` verify the signature
+but never check the envelope's `sent_at` field. An attacker who
+captures a signed `introduce` or `memory_slice` can replay it
+indefinitely.
+
+**Changes required:**
+- `handshake.py:parse_incoming` and `slice.py:parse_envelope`:
+  add a `max_age_seconds` parameter (default 300, i.e. 5 minutes).
+  Reject envelopes where `sent_at` is older than `now - max_age`
+  or more than `max_age` in the future (clock skew tolerance).
+- Document the choice in the README. The 5-minute window is a
+  trade-off: shorter is safer (replay window) but breaks legitimate
+  slow clients; longer is more forgiving but exposes a longer
+  replay window. The current 30-day meeting-TTL is independent.
+
+**Threat model:** a passive network observer (or a compromised log
+store) replays a captured `introduce` envelope. The window is bounded
+by `max_age_seconds`. Clock skew of more than 5 minutes is rare in
+modern environments but not impossible; the future-clock tolerance
+is the same `max_age_seconds` to keep the implementation simple.
+
+**TDD plan:**
+- `test_handshake.py`: a test that signs an envelope, then waits (or
+  fakes the clock to) `max_age + 1` seconds and asserts parse
+  rejects it.
+- A test that signs with `sent_at = now + max_age + 1` and asserts
+  parse rejects the future-dated envelope.
+
+**Effort:** half a cycle. The challenge is `sent_at` is set by the
+sender; the receiver needs a reliable clock. If the receiver's
+clock is skewed, legit envelopes look stale. A short window (5
+minutes) is the mitigation; logging rejected replays for operator
+audit is the detection.
+
+### 3. `from_public_key` cross-check on receive (low)
+
+**Today:** `handle_introduce_respond` and `handle_receive_public`
+verify the signature against `envelope["from_public_key"]`. They do
+not cross-check that `from_public_key` matches the meeting record's
+`peer_public_key` (the v0.2 branch's design was implicit on this).
+
+**Changes required:**
+- After signature verification, look up the meeting by sender_id.
+  If found, compare `m.peer_public_key` to `envelope["from_public_key"]`.
+  Reject if they differ (and the meeting record is the source of
+  truth for who the peer is).
+
+**Threat model:** within a single meeting `agentId`, an attacker
+who can produce a valid signature under a key they control (via
+key collision, which is computationally infeasible for ed25519, OR
+via a flaw in `parse_envelope`'s self-consistency check) could
+masquerade as the same agentId with a different key. The cross-check
+makes the binding explicit.
+
+**Why this is low-priority:** the agentId is `sha256(pubkey)[:8]`
+and an attacker who can produce a valid signature under a key
+matching the agentId is the agent. Practically not exploitable
+without a separate crypto break. The cross-check is defense in depth.
+
+**TDD plan:**
+- `test_handshake.py`: a test that sets up a meeting with peer
+  key `K1`, then signs an envelope with a different key `K2` (also
+  valid for the same agentId by construction, since agentId is
+  derived from the public key — this test may need a different
+  approach: generate two distinct agentIds, sign the envelope with
+  the second's key, but claim the meeting is with the first).
+  Assert parse_incoming rejects.
+
+**Effort:** quarter cycle.
+
+### 4. Operator-rotation in the directory (low)
+
+**Today:** the directory at https://hermes-a2a.dpmob.com/ has a
+ROOT_SYSTEM_POLICY (Cloudflare Pages env var) listing two operators.
+Adding a third, removing one, or rotating a key requires updating
+the secret and triggering a redeploy. There's no UI for it and
+no audit log of who changed what when.
+
+**Changes required (v0.3, but might be out of scope for the plugin
+repo — it would live in `directory/operator/`):**
+- A small `directory/operator/policy_rotate.py` script that:
+  - Reads the current `ROOT_SYSTEM_POLICY` from the Cloudflare API
+  - Adds/removes/rotates the operator
+  - Writes back
+  - Logs the change to a local audit log
+- The script would be called manually, like `make_submission.py` and
+  `render_agents.py`. It does NOT change the v1.1 env-driven allowlist
+  in `submit.js`; it just provides a CLI for operators to manage it.
+
+**Threat model:** a compromised operator key would let an attacker
+list and approve entries indefinitely. Rotation must be straightforward
+enough that operators do it regularly.
+
+**Effort:** half a cycle, if scope-creep limited to the CLI. (The
+directory's `submit.js` is already correct — multi-approver, fail-closed
+on empty list, JSON-string env support.)
+
+### 5. v0.2.x → v0.3 churn (process)
+
+**Today:** v0.2.0 was just shipped; v0.3 will be the next release.
+Each iteration has been a single commit with full TDD coverage and
+a fresh git tag. The cadence has been: identify a threat → write the
+failing test → write the minimal code → verify on the live pair
+(`.2` and `.3`) → tag and release. Continue this.
+
+**The risk to the cadence:** v0.3 will touch *both* the plugin
+(slice fetching, replay) and the directory (operator rotation).
+That's two scopes. Recommendation: ship v0.3.0-plugin (items 1-3
+above) and v0.3.0-directory (item 4) as separate tags so each is
+independently roll-back-able.
+
+## Test counts at v0.2.0
+
+| Suite | Tests | Notes |
+|---|---|---|
+| Plugin unit | 171 | +4 security regressions from the v0.2 port |
+| Plugin e2e | 1 (skipped) | `tests/e2e_demo.py` mutates live state; not in CI |
+| Directory (Node) | 35 | covers 4 directory v2 cycles |
+
+## What this document is NOT
+
+It's not a contract. Items here are ordered by the threat model
+they close, not by deadline. If a v0.3 user reports an issue
+that's not on this list, the list gets reordered; if an item here
+turns out to be unworkable, it gets dropped with a note in the
+CHANGELOG explaining why.
