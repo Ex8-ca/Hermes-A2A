@@ -3,21 +3,33 @@
 
 Reads the live catalog from https://hermes-a2a.dpmob.com/list (or any
 URL passed via --list-url) and produces one HTML file per agent in
-directory/pages/agent/<agent_id>.html, baking the agent's id into the
-template. Re-run after every submit so newly-added agents get their
-own page.
+directory/pages/agent/<agent_id>.html, baking the agent's data into
+the HTML so the page is complete without JS. Re-run after every
+submit so newly-added agents get their own page, and so updates to
+existing agents propagate.
 
 Usage:
     python3 render_agents.py
     python3 render_agents.py --list-url https://example.com/list
     python3 render_agents.py --pages-dir directory/pages
+
+The actual rendering lives in directory/render.mjs (Node ESM). This
+script is a thin CLI wrapper that fetches the catalog and shells out
+to render_one.mjs once per page. Keeping the rendering in Node means
+the same code runs in the Node test suite and at the operator's CLI
+— there's no second implementation to drift.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
+import os
+import subprocess
 import sys
+import tempfile
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 
@@ -27,30 +39,18 @@ def fetch_list(url: str) -> dict[str, Any]:
         return json.loads(r.read().decode("utf-8"))
 
 
-def render(template: str, entry: dict[str, Any]) -> str:
-    """Bake the agent id into the template by replacing the URL-parsing
-    JS with a literal constant. The rest of the template's runtime
-    code (which fetches /list to populate the fields) is left intact."""
-    agent_id = entry["agent_id"]
-    safe_id = agent_id.replace("\\", "\\\\").replace('"', '\\"')
-    old_block = (
-        "    const id = decodeURIComponent(\n"
-        "      location.pathname.replace(/^\\/agent\\//, \"\").replace(/\\.html$/, \"\")\n"
-        "    );\n"
-        "    document.getElementById(\"agent-id\").textContent = id;"
-    )
-    new_block = (
-        '    // Agent id is baked in by the build (see render_agents.py).\n'
-        f'    const id = "{safe_id}";\n'
-        '    document.getElementById("agent-id").textContent = id;'
-    )
-    if old_block not in template:
-        raise RuntimeError("template marker for agent_id not found — template changed?")
-    out = template.replace(old_block, new_block, 1)
-    # Switch the data source from the static seed to /list, so the
-    # rendered page reflects whatever the catalog currently shows.
-    out = out.replace('fetch("/agents.json")', 'fetch("/list")', 1)
-    return out
+def render_via_node(render_one: Path, template_path: str, entry: dict[str, Any], out_path: Path) -> None:
+    """Run render_one.mjs on one entry; writes HTML to out_path."""
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump(entry, f)
+        entry_path = f.name
+    try:
+        subprocess.run(
+            ["node", str(render_one), template_path, entry_path, str(out_path)],
+            check=True, capture_output=True, text=True,
+        )
+    finally:
+        os.unlink(entry_path)
 
 
 def main() -> int:
@@ -64,16 +64,18 @@ def main() -> int:
     if not agents:
         print(f"WARN: /list returned 0 agents; nothing to render", file=sys.stderr)
 
-    template_path = f"{args.pages_dir}/agent/_template.html"
-    with open(template_path, encoding="utf-8") as f:
-        template = f.read()
+    render_one = Path(__file__).parent / "render_one.mjs"
+    if not render_one.exists():
+        print(f"ERROR: render helper not found at {render_one}", file=sys.stderr)
+        return 1
+
+    template_path = str(Path(args.pages_dir) / "agent" / "_template.html")
 
     out_paths = []
     for entry in agents:
         agent_id = entry["agent_id"]
-        out_path = f"{args.pages_dir}/agent/{agent_id}.html"
-        with open(out_path, "w", encoding="utf-8") as f:
-            f.write(render(template, entry))
+        out_path = Path(args.pages_dir) / "agent" / f"{agent_id}.html"
+        render_via_node(render_one, template_path, entry, out_path)
         out_paths.append(out_path)
         print(f"wrote {out_path} ({entry.get('name', agent_id)})")
 
@@ -82,5 +84,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    import json
     sys.exit(main())

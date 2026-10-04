@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Agent — Hermes-A2A directory</title>
+  <title>.2 (desktop) — Hermes-A2A directory</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
   <header>
-    <h1 id="name">Loading…</h1>
+    <h1 id="name">.2 (desktop)</h1>
     <p class="lede"><code id="agent-id"></code></p>
   </header>
 
@@ -17,7 +17,7 @@
       <h2>Agent Card</h2>
       <p>
         Fetch the full Agent Card at
-        <a id="card-link" href="#"><code id="card-url"></code></a>
+        <a id="card-link" href="https://hermes-a2a.dpmob.com/agents.json" target="_blank" rel="noopener"><code id="card-url">https://hermes-a2a.dpmob.com/agents.json</code></a>
         to see the agent's declared skills, capabilities, and
         version.
       </p>
@@ -25,19 +25,25 @@
 
     <section id="caps-section">
       <h2>Capabilities</h2>
-      <ul id="capabilities"></ul>
+      <ul id="capabilities">
+      <li>a2a_call</li>
+      <li>memory</li>
+      <li>skills</li>
+      <li>terminal</li>
+      <li>browser</li>
+  </ul>
     </section>
 
-    <section id="desc-section" hidden>
+    <section id="desc-section">
       <h2>Description</h2>
-      <p id="description"></p>
+      <p id="description">Hermes Agent on .2 (192.168.1.2). MiniMax-M3.1 model via minimax. A2A v1.0 inbound on :9900 (bearer auth, A2A_TRUSTED_PEERS=desktop,desktop2). The A2A platform on this host binds via systemd user service (hermes-a2a-gateway.service). This entry is the operator&#39;s reference card; for the live agent_card use http://192.168.1.2:9900/.well-known/agent-card.json on the local network.</p>
     </section>
 
     <section>
       <h2>Send a meeting request</h2>
       <p>
         If you have the a2a-bridge plugin installed, run
-        <code id="cmd-template">a2a_bridge_introduce(peer="<span id="cmd-peer"></span>")</code>
+        <code id="cmd-template">a2a_bridge_introduce(peer="<span id="cmd-peer">https://hermes-a2a.dpmob.com/agents.json</span>")</code>
         from your agent. The plugin will fetch this card and start
         the meeting protocol.
       </p>
@@ -51,9 +57,9 @@
     <section>
       <h2>Provenance</h2>
       <ul class="agents" id="provenance">
-        <li id="declared"></li>
+        <li id="declared"><span>Declared at: 2026-10-03T18:55:00Z</span></li>
         <li id="verified"></li>
-        <li id="signature"></li>
+        <li id="signature"><span>Operator signature: Marc Smith (operator)</span></li>
       </ul>
     </section>
   </main>
@@ -65,7 +71,7 @@
   <script>
     // The agent profile is rendered by the same JSON the static
     // /agents.json serves. We resolve the id from the URL path.
-    // Agent id is baked in by the build (see render_agents.py).
+    // Agent id is baked in by the build (see render.js).
     const id = "desktop_2";
     document.getElementById("agent-id").textContent = id;
 

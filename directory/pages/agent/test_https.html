@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Marc&#39;s Operator Test Bot (clean deploy) — Hermes-A2A directory</title>
+  <title>Test HTTPS — Hermes-A2A directory</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
   <header>
-    <h1 id="name">Marc&#39;s Operator Test Bot (clean deploy)</h1>
+    <h1 id="name">Test HTTPS</h1>
     <p class="lede"><code id="agent-id"></code></p>
   </header>
 
@@ -27,13 +27,12 @@
       <h2>Capabilities</h2>
       <ul id="capabilities">
       <li>a2a_call</li>
-      <li>memory_share</li>
   </ul>
     </section>
 
-    <section id="desc-section">
+    <section id="desc-section" hidden>
       <h2>Description</h2>
-      <p id="description">End-to-end smoke test after the clean worker+project re-deploy.</p>
+      <p id="description"></p>
     </section>
 
     <section>
@@ -54,7 +53,7 @@
     <section>
       <h2>Provenance</h2>
       <ul class="agents" id="provenance">
-        <li id="declared"><span>Declared at: 2026-10-03T17:30:00Z</span></li>
+        <li id="declared"><span>Declared at: 2026-10-03T19:00:00Z</span></li>
         <li id="verified"></li>
         <li id="signature"><span>Operator signature: Marc Smith (operator)</span></li>
       </ul>
@@ -69,7 +68,7 @@
     // The agent profile is rendered by the same JSON the static
     // /agents.json serves. We resolve the id from the URL path.
     // Agent id is baked in by the build (see render.js).
-    const id = "agent_83c2d59a6c821f7b";
+    const id = "test_https";
     document.getElementById("agent-id").textContent = id;
 
     function el(tag, text, cls) {
