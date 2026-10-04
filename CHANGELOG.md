@@ -41,8 +41,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (auto-fill happy path, explicit URL wins, explicit name wins,
   `--port` override, error path).
 
-Total Python tests: 25 (was 12). Plugin (201) and directory Node
-(43) test counts unchanged.
+Total Python tests: 25 (was 12). Plugin (189 actual) and directory
+Node (43) test counts unchanged.
 
 ### Docs
 
@@ -58,10 +58,29 @@ Total Python tests: 25 (was 12). Plugin (201) and directory Node
 - The directory-side change for `*.ts.net` URLs (no liveness probe,
   `isPrivateOrLoopbackHost()` extension) shipped in v0.3.3. v0.4.0
   is the operator-side tooling to actually use that path.
-- The two live entries (`desktop_2`, `ai5080`) still use their LAN
-  `agent_card_url`s (`http://192.168.1.{2,3}:9900/...`) — switching
-  them to MagicDNS URLs is a separate manual decision the operator
-  makes after reviewing v0.4.0.
+- The two live entries (`desktop_2`, `ai5080`) were migrated to
+  MagicDNS URLs after this release was committed
+  (`http://minisforum-desktop.taila6e2e.ts.net:9900/...` and
+  `http://ai5080.taila6e2e.ts.net:9900/...`).
+
+## [0.3.4] — 2026-10-04
+
+### Fixed
+
+- **PyPI release build** — `python -m build` was failing on every release
+  since v0.2.0 with `error: Multiple top-level packages discovered in a
+  flat-layout: ['plugins', 'directory']`. The top-level `directory/`
+  directory (node/web frontend) was being picked up by setuptools' default
+  auto-discovery alongside the real `plugins/` package. Added an explicit
+  `[tool.setuptools.packages.find]` block in `pyproject.toml` that only
+  includes `plugins.*` and excludes `directory*` / `scripts*`.
+- **CI test collection** — every `pytest` run on `main` since v0.2.0 was
+  failing to collect `plugins/a2a_bridge/tests/*.py` with
+  `ModuleNotFoundError: No module named 'plugins'`. CI installs `pytest`
+  but not the project (the plugin is drop-in, not pip-installable on CI),
+  and pytest's CWD-on-sys.path behavior changed. Added
+  `pythonpath = ["."]` to `[tool.pytest.ini_options]` so test files can
+  do `from plugins.a2a_bridge import ...` against the repo root.
 
 ## [0.3.3] — 2026-10-04
 
