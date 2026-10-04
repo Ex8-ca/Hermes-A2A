@@ -156,8 +156,11 @@ def test_confirm_approved_false_cancels() -> None:
 
 def test_audit_returns_table() -> None:
     r = bridge.handle_audit({"last": 5})
-    # Either we got rows or the empty marker; both are valid.
-    assert "direction" in r or "no matching" in r
+    # The audit renders a markdown table. The header is "dir" (column
+    # for direction); rows have the direction value (inbound/outbound)
+    # in that column. The test checks for either the column header or
+    # any of the direction values being present.
+    assert "dir" in r or "outbound" in r or "inbound" in r or "no matching" in r
 
 
 def test_list_peers_returns_table() -> None:

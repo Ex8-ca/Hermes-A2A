@@ -477,11 +477,11 @@ The directory currently has one root, one KV namespace, and one `ROOT_SYSTEM_POL
 
 | Suite | Tests | Notes |
 |---|---|---|
-| Plugin unit | 201 | unchanged from v0.3.0 |
+| Plugin unit | 189 | unchanged from v0.3.0 (the "201" in earlier notes was a release-quote that didn't match the actual collection) |
 | Plugin e2e | 1 (skipped) | unchanged |
 | Directory (Node) | 43 | +7 Tailscale cases in `validate.test.js` |
 | Directory (Python) | 25 | was 12; +12 `test_discover_tailscale.py` + 1 `test_make_submission_tailscale.py` |
-| **Total** | **270** | |
+| **Total** | **258** | |
 
 ## What this document is NOT
 
