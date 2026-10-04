@@ -683,7 +683,8 @@ def handle_introduce_respond(args: Dict[str, Any], **_kw) -> str:
     # Reconstruct the introduce envelope the user already saw, and
     # add the `signature` field from the args. (The agent is
     # responsible for surfacing a structured consent prompt with
-    # these fields and the user already approved.)
+    # these fields and the user already approved. The signature
+    # check is performed by ``parse_incoming``.)
     incoming = {
         "method": "introduce",
         "from": args.get("from_peer", ""),
@@ -692,6 +693,10 @@ def handle_introduce_respond(args: Dict[str, Any], **_kw) -> str:
         "intent": args.get("intent", ""),
         "consent_until": args.get("consent_until", ""),
     }
+    # ``sent_at`` is required for the replay-window check. The agent
+    # passes it through from the original envelope.
+    if "sent_at" in args:
+        incoming["sent_at"] = args["sent_at"]
     # We need the signature. If the user only approved the consent,
     # they probably don't have it. The agent's UI must show it
     # alongside the consent prompt; the agent passes it through.
@@ -702,6 +707,21 @@ def handle_introduce_respond(args: Dict[str, Any], **_kw) -> str:
         verified = handshake.parse_incoming(incoming)
     except handshake.HandshakeError as e:
         return f"Error: incoming envelope failed verification: {e}"
+
+    # Cross-check: if we already have a meeting record for this
+    # agentId, the public key on this envelope must match. Defense
+    # in depth against a future bug in the agentId/key fingerprint
+    # check, or a key-collision attack.
+    store = meetings.Meetings().load()
+    existing = store.get(verified["from"])
+    if existing is not None and existing.peer_public_key != verified["public_key"]:
+        return (
+            f"Error: incoming envelope's public_key does not match "
+            f"the public key on file for {verified['from']}; refusing "
+            f"to rebind the meeting. (This is defense in depth — the "
+            f"agentId/key fingerprint check in parse_incoming should "
+            f"have already caught this.)"
+        )
 
     if not _a2a_plugin_available():
         return ("Error: the Hermes A2A platform plugin is not enabled; "
@@ -718,7 +738,6 @@ def handle_introduce_respond(args: Dict[str, Any], **_kw) -> str:
 
     # Persist the meeting on our side.
     record = handshake.to_meeting_record(verified, our_url=_our_card_url(), our_granted_to_them=granted)
-    store = meetings.Meetings().load()
     store.upsert(meetings.Meeting(**record))
     store.save()
     return f"Meeting persisted. Sent ack. Peer reply: {reply}"
@@ -771,16 +790,28 @@ def handle_share_public(args: Dict[str, Any], **_kw) -> str:
         return ("Error: the Hermes A2A platform plugin is not enabled; "
                 "cannot send the slice.")
 
-    # Build a minimal slice. In a fuller implementation we'd read
-    # the actual heading + body from MEMORY.md at slice_.path /
-    # slice_.heading_anchor. For v0.2 we send the slice name +
-    # level as a starter so the receiver sees a real envelope; the
-    # next iteration will fetch the actual contents.
+    # Build a real slice. v0.3 reads the actual heading + body
+    # from the source file at slice_.path, filtered to the
+    # heading_anchor if set. The fetched content goes into the
+    # envelope; the receiver sees the same bytes the sender had.
+    try:
+        home = Path(os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes"))
+        contents = slice_mod.fetch_contents(
+            slice_, home=home,
+        )
+    except slice_mod.SliceFetchError as e:
+        return f"Error: failed to fetch slice contents: {e}"
+    if not contents:
+        return (
+            f"Error: slice '{slice_name}' resolved to no sections "
+            f"from {slice_.path} (anchor={slice_.heading_anchor!r}); "
+            f"refusing to send an empty slice."
+        )
     s = slice_mod.Slice(
         name=slice_name,
         kind=slice_.kind,
         level=slice_.level,
-        contents=[{"heading": f"## {slice_name}", "body": f"(v0.2 placeholder; the actual slice contents will be fetched from {slice_.path} in the next release.)"}],
+        contents=contents,
     )
     envelope = slice_mod.build_envelope(s, to_peer=peer_id)
     msg = json.dumps({"envelope": envelope, "type": "memory_slice"})
@@ -829,11 +860,20 @@ def handle_receive_public(args: Dict[str, Any], **_kw) -> str:
             return f"Refused: our policy blocks slice '{slice_.name}' from {sender_id}: {reason}"
 
     # Check meeting record: we must have an active meeting with the
-    # sender that grants read_public.
+    # sender that grants read_public. Cross-check: the public key on
+    # the envelope must match the meeting record's stored public key.
     store = meetings.Meetings().load()
     m = store.get(sender_id)
     if m is None or not m.is_active() or not m.can("read_public"):
         return f"Refused: no active meeting with {sender_id} that grants read_public."
+    envelope_public_key = str(envelope.get("from_public_key", ""))
+    if m.peer_public_key != envelope_public_key:
+        return (
+            f"Refused: incoming slice's from_public_key does not match "
+            f"the public key on file for {sender_id}; refusing the slice. "
+            f"(Defense in depth — the agentId/key fingerprint check in "
+            f"parse_envelope should have already caught this.)"
+        )
 
     # Append to MEMORY.md with provenance.
     prov = slice_mod.format_provenance(envelope)

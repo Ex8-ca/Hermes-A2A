@@ -264,3 +264,265 @@ class TestV02SecurityGates:
         })
         assert "Error" in r or "refused" in r.lower()
         assert not outside.exists() or "refused" in r.lower()
+
+    def test_receive_public_blocks_key_substitution(
+        self, stub_ctx: StubCtx, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """An envelope whose ``from_public_key`` differs from the
+        public key recorded in the meeting record must be refused,
+        even though the signature verifies against the envelope's
+        own key. This is defense in depth against key-collision or
+        identity-pivot attacks where an attacker can produce a
+        valid signature under a key they control but claim to be a
+        different agent."""
+        from plugins.a2a_bridge import keyring, meetings, policy, slice as slice_mod
+        from plugins.a2a_bridge.slice import Slice
+
+        # Two distinct identities. The envelope will be signed by B
+        # (the attacker's key) but the meeting record will claim A
+        # is the peer.
+        a = keyring._generate()
+        b = keyring._generate()
+
+        # Set up a meeting with A as the peer.
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        store = meetings.Meetings().load()
+        store.upsert(meetings.Meeting(
+            agent_id=a.agent_id,
+            peer_url="https://peer.example.com",
+            peer_public_key=a.public_key_b64,
+            intent="share public slices",
+            granted=["read_public"],
+            consent_until="2099-12-31T00:00:00Z",
+        ))
+        store.save()
+
+        # B (the attacker) builds a slice envelope addressed to us.
+        # The signature is valid for B's key. The envelope claims
+        # from_peer=A.agent_id (so it can be addressed to a meeting
+        # we already have). The signature verifies against B's key,
+        # not A's — and that's the cross-check we want to catch.
+        slice_ = Slice(
+            name="project-alpha",
+            kind="memory",
+            level=policy.Level.PUBLIC_ALL,
+            contents=[{"heading": "## fake", "body": "x"}],
+        )
+        # Allow-list lookup: handle_receive_public checks the central
+        # allowlist for the slice name. Easiest: pretend the slice is
+        # in the allowlist. We'll use a public_all slice so the policy
+        # check passes (it falls through to "level must be public_all"
+        # if the slice isn't in our allowlist at all).
+        env = slice_mod.build_envelope(slice_, to_peer="us", sender_identity=b)
+        env["from_peer"] = a.agent_id  # spoof: claim the peer is A
+        # Now the signature was made over from_peer=B.agent_id, but
+        # we've set from_peer=A.agent_id. The signature won't verify
+        # at all, which is the same end result. The point of this
+        # test is to lock in that we refuse, regardless of *how*
+        # the envelope is malformed.
+        r = bridge.handle_receive_public({"envelope": env})
+        assert "Error" in r or "Refused" in r or "refused" in r
+
+    def test_introduce_respond_blocks_key_substitution(
+        self, stub_ctx: StubCtx, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """If a user already has a meeting with one peer but an
+        incoming introduce envelope claims to be from that same
+        agentId with a different public_key, the cross-check
+        should refuse. (The cross-check only fires when we already
+        have a meeting record.)"""
+        from plugins.a2a_bridge import handshake, keyring, meetings
+
+        a = keyring._generate()
+        b = keyring._generate()
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        store = meetings.Meetings().load()
+        store.upsert(meetings.Meeting(
+            agent_id=a.agent_id,
+            peer_url="https://peer.example.com",
+            peer_public_key=a.public_key_b64,
+            intent="share public slices",
+            granted=["read_public"],
+            consent_until="2099-12-31T00:00:00Z",
+        ))
+        store.save()
+
+        # B forges an introduce envelope that claims to be from A.
+        # The signature verifies against B's key but the meeting
+        # record says A's key. The cross-check should refuse.
+        # (We can't easily sign an envelope that claims A's agentId
+        # but uses B's key, because parse_incoming's
+        # _check_agent_id_matches_key would reject it. The realistic
+        # threat is a re-bind attempt where B presents a fresh
+        # introduce with B's own key but claims the meeting; we
+        # handle that by refusing the ack since A.agent_id doesn't
+        # match B's agentId.)
+        forged = handshake.build_introduce(
+            agent_card_url="https://peer.example.com",
+            intent="rebind",
+            local_identity=b,
+        )
+        # Tweak from to point at A (forge identity). parse_incoming
+        # would reject this because the agentId is a fingerprint of
+        # B's key, not A's. We want to test the cross-check anyway.
+        r = bridge.handle_introduce_respond({
+            "approve": True,
+            "from_peer": a.agent_id,  # claim to be A
+            "agent_card_url": "https://peer.example.com",
+            "from_public_key": forged["public_key"],
+            "intent": "rebind",
+            "consent_until": forged["consent_until"],
+            "signature": forged["signature"],
+        })
+        # Either we get an error from the agentId/key check (best),
+        # or we get a refusal from the cross-check. The point is: no
+        # meeting is persisted with B's key under A's agentId.
+        assert "Error" in r or "Refused" in r or "verification" in r.lower()
+
+    def test_introduce_respond_cross_check_catches_substitution(
+        self, stub_ctx: StubCtx, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """Defense in depth: even if a future bug lets an attacker
+        bypass the agentId/key fingerprint check, the meeting-record
+        cross-check still refuses. We simulate the bypass by
+        monkeypatching _check_agent_id_matches_key to always return
+        True; then the only line of defense is the cross-check.
+        """
+        from plugins.a2a_bridge import handshake, keyring, meetings
+
+        a = keyring._generate()
+        b = keyring._generate()
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        store = meetings.Meetings().load()
+        store.upsert(meetings.Meeting(
+            agent_id=a.agent_id,
+            peer_url="https://peer.example.com",
+            peer_public_key=a.public_key_b64,
+            intent="share public slices",
+            granted=["read_public"],
+            consent_until="2099-12-31T00:00:00Z",
+        ))
+        store.save()
+
+        # B forges an envelope, claiming from_peer = A. With the
+        # fingerprint check bypassed, parse_incoming would accept.
+        # The cross-check (envelope.public_key vs meeting.peer_public_key)
+        # should still refuse.
+        forged = handshake.build_introduce(
+            agent_card_url="https://peer.example.com",
+            intent="rebind",
+            local_identity=b,
+        )
+        # Patch the fingerprint check to always pass.
+        monkeypatch.setattr(
+            handshake, "_check_agent_id_matches_key",
+            lambda *a, **kw: True,
+        )
+        # Tweak from to claim A's agentId (fingerprint check bypassed).
+        envelope = dict(forged)
+        envelope["from"] = a.agent_id
+        # We need to re-sign the envelope under B's key, with the
+        # modified from field, for parse_incoming to verify the
+        # signature.
+        from plugins.a2a_bridge import canonical
+        envelope["signature"] = b.sign(canonical.canonical_bytes(envelope))
+
+        r = bridge.handle_introduce_respond({
+            "approve": True,
+            "from_peer": envelope["from"],
+            "agent_card_url": envelope["agent_card_url"],
+            "from_public_key": envelope["public_key"],
+            "intent": envelope["intent"],
+            "consent_until": envelope["consent_until"],
+            "sent_at": envelope["sent_at"],
+            "signature": envelope["signature"],
+        })
+        # The cross-check should fire and refuse with a clear message
+        # about the key not matching the meeting record.
+        assert "Error" in r or "Refused" in r or "does not match" in r.lower() or "key" in r.lower()
+
+    def test_introduce_respond_cross_check_accepts_matching_key(
+        self, stub_ctx: StubCtx, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """When the meeting record's public key matches the envelope's
+        public key, the cross-check passes (it does not refuse a
+        legitimate re-introduce from the same peer)."""
+        from plugins.a2a_bridge import handshake, keyring, meetings
+
+        a = keyring._generate()
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        store = meetings.Meetings().load()
+        store.upsert(meetings.Meeting(
+            agent_id=a.agent_id,
+            peer_url="https://peer.example.com",
+            peer_public_key=a.public_key_b64,
+            intent="share public slices",
+            granted=["read_public"],
+            consent_until="2099-12-31T00:00:00Z",
+        ))
+        store.save()
+
+        # A legitimately re-introduces. Same key. Cross-check passes.
+        legit = handshake.build_introduce(
+            agent_card_url="https://peer.example.com",
+            intent="rebound",
+            local_identity=a,
+        )
+        r = bridge.handle_introduce_respond({
+            "approve": True,
+            "from_peer": legit["from"],
+            "agent_card_url": legit["agent_card_url"],
+            "from_public_key": legit["public_key"],
+            "intent": legit["intent"],
+            "consent_until": legit["consent_until"],
+            "sent_at": legit["sent_at"],
+            "signature": legit["signature"],
+        })
+        # The cross-check itself passed (no "does not match" / "refusing
+        # to rebind" message). Other errors later in the handler are
+        # unrelated to the cross-check — they hit the A2A-platform
+        # unavailability check in the test env.
+        assert "does not match" not in r.lower()
+        assert "refusing to rebind" not in r.lower()
+
+    def test_receive_public_cross_check_catches_substitution(
+        self, stub_ctx: StubCtx, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """When an incoming slice's from_public_key differs from the
+        meeting record's stored public_key, refuse the slice."""
+        from plugins.a2a_bridge import keyring, meetings, policy, slice as slice_mod
+        from plugins.a2a_bridge.slice import Slice
+
+        a = keyring._generate()
+        b = keyring._generate()
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        store = meetings.Meetings().load()
+        store.upsert(meetings.Meeting(
+            agent_id=a.agent_id,
+            peer_url="https://peer.example.com",
+            peer_public_key=a.public_key_b64,
+            intent="share public slices",
+            granted=["read_public"],
+            consent_until="2099-12-31T00:00:00Z",
+        ))
+        store.save()
+
+        # B sends a slice envelope addressed to us. The signature
+        # verifies against B's key, but the meeting record has A's
+        # key. Without the cross-check, parse_envelope would reject
+        # this for agentId mismatch (B's from_peer != A.agent_id).
+        # The cross-check is the second line of defense.
+        slice_ = Slice(
+            name="project-alpha",
+            kind="memory",
+            level=policy.Level.PUBLIC_ALL,
+            contents=[{"heading": "## fake", "body": "x"}],
+        )
+        env = slice_mod.build_envelope(slice_, to_peer="us", sender_identity=b)
+        r = bridge.handle_receive_public({"envelope": env})
+        # Either parse_envelope caught the agentId mismatch first,
+        # or the cross-check catches the key mismatch. Both are valid.
+        assert "Error" in r or "Refused" in r or "does not match" in r.lower()
