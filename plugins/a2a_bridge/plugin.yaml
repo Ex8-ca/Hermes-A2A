@@ -24,7 +24,14 @@ provides_tools:
   - a2a_bridge_revoke
   - a2a_bridge_share_public
   - a2a_bridge_receive_public
+  - a2a_bridge_list_memex8_public
+  - a2a_bridge_share_memex8
+  - a2a_bridge_receive_memex8
 requires_env: []
-optional_env: []
+# MEMEX8_API_BASE and MEMEX8_API_KEY are only consumed by the
+# memex8 slice tools; the rest of the bridge doesn't need them.
+optional_env:
+  - MEMEX8_API_BASE
+  - MEMEX8_API_KEY
 # Use the same per-peer bearer tokens as the a2a platform plugin — no
 # additional secrets to manage.

@@ -3,6 +3,69 @@
 All notable changes to Hermes-A2A are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased] — memex8 slice transport
+
+### Added — Cross-agent memex8 memory sharing (v0.6.0)
+
+Three new tools and a new envelope kind so an agent can ship specific
+memex8 memories to another agent without leaking the rest of its store.
+The trust model is the same as the filesystem slice transport
+(`a2a_bridge_share_public` / `_receive_public`): signature on the
+envelope, meeting record with `read_public`, central allowlist.
+What's new is the **visibility** check on the *data* itself.
+
+**New envelope kind: `memex8_memory_slice`**
+
+Carries a list of memex8 memory IDs and the sender's memex8 base URL.
+The receiver re-fetches each memory from the sender's memex8 over
+HTTP and re-checks `visibility == "public"` before writing anything
+to disk. This is the part that fixes the data-side leak: a sender
+who flips a memory to private between sign and delivery causes the
+receiver to refuse the whole slice.
+
+**New tools:**
+
+- **`a2a_bridge_list_memex8_public(limit, offset)`** — discovery.
+  Hits `GET /api/v1/memories/public` on the local memex8 and prints
+  a readable summary so the agent knows what's shareable.
+- **`a2a_bridge_share_memex8(peer, slice_name, memory_ids)`** — sender.
+  Pre-flights every memory ID locally, runs the same per-peer
+  allowlist + meeting record check as `share_public`, signs a
+  `memex8_memory_slice` envelope, and dispatches through the
+  underlying a2a_call (with the existing approval gate).
+- **`a2a_bridge_receive_memex8(envelope, write_to)`** — receiver.
+  Verifies signature, cross-checks the envelope's public key against
+  the meeting record, re-fetches each memory from the sender's
+  memex8 base URL, re-validates `visibility=public`, then appends
+  to `write_to` (default `MEMORY.md`) with a provenance comment.
+
+**New module: `plugins/a2a_bridge/memex8_client.py`**
+
+Tiny `requests`-based client with three methods (`list_public`,
+`get_memory`, `fetch_memex8_slice`). Fail-closed: every transport
+or 4xx error raises `Memex8ClientError` so callers don't have to
+remember which path returns `None`. New dep: `requests>=2.28` in
+`pyproject.toml` (already on the memex8 plugin's dep list).
+
+**New env vars** (optional, only the memex8 tools read them):
+- `MEMEX8_API_BASE` (default `http://localhost:8080`)
+- `MEMEX8_API_KEY` (bearer token)
+
+**Tests:** 12 new tests in
+`plugins/a2a_bridge/tests/test_memex8_slice.py`. Covers envelope
+build/parse round-trip, signature tampering, non-http URL refusal,
+empty `memory_ids` refusal, client HTTP behavior, sender-side
+preflight on private memory, meeting-record enforcement on the
+sender side, and the receiver's private-after-refetch refusal.
+Full suite: **210/210 pass** (was 198 before this change).
+
+**Depends on:** the memex8 side of this work — a memex8 server at
+v1.2.0+ with the `visibility` field on `MemoryPoint`, the
+`GET /api/v1/memories/public` discovery endpoint, and the
+`visibility` field on `POST /api/v1/memories`. Without those, the
+sender preflight will fail with "memex8 unreachable" and the
+discovery tool will return an empty list.
+
 ## [Unreleased] — README + third-party demo
 
 ### Added

@@ -33,6 +33,7 @@ from plugins.a2a_bridge import canonical, handshake, keyring, meetings, policy
 
 
 SLICE_KIND = "memory_slice"
+MEMEX8_SLICE_KIND = "memex8_memory_slice"
 DEFAULT_HEADING_PREFIX = "## "
 
 
@@ -259,4 +260,144 @@ def format_provenance(envelope: Dict[str, Any]) -> str:
     when = envelope.get("sent_at", "?")
     return (
         f"<!-- a2a-bridge: source={src} key={fp} task={task} received={_now_iso()} sent={when} -->"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# memex8-backed slice transport
+# ─────────────────────────────────────────────────────────────────────────
+#
+# A memex8 slice is a signed envelope that names a set of memex8
+# memory IDs and the base URL of the sender's memex8 API. The receiver
+# re-fetches each memory from the sender's memex8, re-verifies that
+# each is `visibility=public`, and only then writes the content into
+# its own MEMORY.md (or wherever).
+#
+# This is intentionally a separate envelope kind from `memory_slice`
+# (filesystem markdown): the byte format is different, the failure
+# modes are different (network vs path-traversal), and the audit
+# trail is different. Sharing the same keyring / canonical /
+# handshake machinery keeps the trust model identical.
+
+
+@dataclass
+class Memex8Slice:
+    """A shareable set of memex8 memory IDs.
+
+    Distinct from :class:`Slice` (which carries markdown heading
+    bodies) because the receiver reads the actual content from the
+    sender's memex8 API rather than from a local file.
+    """
+
+    name: str                                # friendly handle for audit + UI
+    memory_ids: List[str] = field(default_factory=list)
+    base_url: str = ""                       # sender's memex8 API base
+    realm_hint: str = ""                     # optional, purely informational
+
+
+def build_memex8_envelope(
+    slice_: Memex8Slice,
+    *,
+    to_peer: str,
+    task_id: str = "",
+    sender_identity: Optional[keyring.Identity] = None,
+    now: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """Sign and return the wire envelope for a memex8 slice.
+
+    The receiver verifies the signature against the meeting's stored
+    public key, then re-fetches each memory from ``base_url`` and
+    re-checks that each is ``visibility=public`` (the sender's check
+    at envelope-build time is necessary but not sufficient — a memory
+    could have been flipped to private in the seconds between sign
+    and fetch).
+    """
+    ident = sender_identity or keyring.load_or_create()
+    envelope: Dict[str, Any] = {
+        "kind": MEMEX8_SLICE_KIND,
+        "from_peer": ident.agent_id,
+        "from_public_key": ident.public_key_b64,
+        "to_peer": to_peer,
+        "slice_name": slice_.name,
+        "memex8_base_url": slice_.base_url,
+        "memory_ids": list(slice_.memory_ids),
+        "sent_at": _now_iso() if now is None else now().isoformat().replace("+00:00", "Z"),
+        "task_id": task_id,
+    }
+    envelope["signature"] = ident.sign(canonical.canonical_bytes(envelope))
+    return envelope
+
+
+def parse_memex8_envelope(
+    envelope: Dict[str, Any],
+    *,
+    max_age_seconds: int = handshake.MAX_ENVELOPE_AGE,
+    now: Optional[Any] = None,
+) -> Memex8Slice:
+    """Validate an incoming memex8 slice envelope and return a Memex8Slice.
+
+    Mirrors :func:`parse_envelope` for the filesystem slice kind.
+    Verifies:
+      * envelope shape (required fields present)
+      * kind is ``memex8_memory_slice``
+      * ``from_peer`` matches the SHA-256 of ``from_public_key``
+      * signature verifies against ``from_public_key``
+      * ``sent_at`` is within the replay window
+      * ``memex8_base_url`` is a non-empty http(s) URL (defense in
+        depth — we never want to ``requests.get(file:///...)``)
+      * ``memory_ids`` is a non-empty list of plain strings
+
+    The receiver then re-fetches each memory via the memex8 client
+    (in ``tools.py``) which performs the visibility re-check.
+    """
+    if not isinstance(envelope, dict):
+        raise SliceError("envelope must be a JSON object")
+    if envelope.get("kind") != MEMEX8_SLICE_KIND:
+        raise SliceError(f"unexpected kind: {envelope.get('kind')!r}")
+    required = (
+        "from_peer",
+        "from_public_key",
+        "to_peer",
+        "slice_name",
+        "memex8_base_url",
+        "memory_ids",
+        "sent_at",
+        "signature",
+    )
+    for field_name in required:
+        if field_name not in envelope:
+            raise SliceError(f"missing required field: {field_name}")
+    if not _check_agent_id_matches_key(
+        str(envelope["from_peer"]), str(envelope["from_public_key"])
+    ):
+        raise SliceError("from_peer does not match SHA-256 of from_public_key")
+    base_url = str(envelope["memex8_base_url"]).strip()
+    if not (base_url.startswith("http://") or base_url.startswith("https://")):
+        raise SliceError(
+            f"memex8_base_url must be http(s); got {base_url!r}"
+        )
+    memory_ids = envelope["memory_ids"]
+    if not isinstance(memory_ids, list) or not memory_ids:
+        raise SliceError("memory_ids must be a non-empty list")
+    if not all(isinstance(m, str) and m.strip() for m in memory_ids):
+        raise SliceError("memory_ids must contain only non-empty strings")
+    message = canonical.canonical_bytes(envelope)
+    if not keyring.Identity.verify(
+        str(envelope["from_public_key"]), message, str(envelope["signature"])
+    ):
+        raise SliceError("signature did not verify")
+    # Replay-window check last so callers can log what was valid
+    # before deciding it's stale.
+    if now is None:
+        handshake.check_replay_window(
+            str(envelope["sent_at"]), max_age_seconds=max_age_seconds
+        )
+    else:
+        handshake.check_replay_window(
+            str(envelope["sent_at"]), max_age_seconds=max_age_seconds, now=now
+        )
+    return Memex8Slice(
+        name=str(envelope["slice_name"]),
+        memory_ids=[str(m) for m in memory_ids],
+        base_url=base_url,
     )

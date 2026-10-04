@@ -33,6 +33,12 @@ dependencies = [
     # `cryptography` is a well-audited, widely-deployed library. The
     # manylinux wheels cover every platform Hermes supports.
     "cryptography>=42",
+    # Used by the memex8 slice transport (see
+    # plugins/a2a_bridge/memex8_client.py). `requests` is the same
+    # dep the memex8 plugin itself uses; we don't import the plugin
+    # here because the bridge and the memex8 plugin are independent
+    # plugin processes that share nothing but the REST contract.
+    "requests>=2.28",
 ]
 
 [project.optional-dependencies]
