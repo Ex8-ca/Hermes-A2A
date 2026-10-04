@@ -81,48 +81,57 @@ def _http_get(url: str, timeout: int = 8) -> bytes:
         return r.read()
 
 
-def a2a_round_trip(peer_url: str, token: str, marker: str) -> tuple[bool, str]:
+def a2a_round_trip(peer_url: str, token: str, marker: str, retries: int = 2) -> tuple[bool, str]:
     """Send a JSON-RPC message/send to peer_url with bearer token.
     Returns (success, reply_text).
 
     Accepts both TASK_STATE_COMPLETED (the agent answered) and
     TASK_STATE_INPUT_REQUIRED (the agent asked a follow-up — valid
     for ambiguous prompts). Other states (FAILED, etc.) are failures.
+
+    Retries on timeout or transient connection errors because the
+    model endpoint is sometimes busy; each retry is a fresh request
+    with a new task_id (so it doesn't queue behind a previous one).
     """
-    body = json.dumps({
-        "jsonrpc": "2.0",
-        "id": "1",
-        "method": "message/send",
-        "params": {
-            "id": f"e2e-{marker}",
-            "message": {
-                "role": "user",
-                "parts": [{"type": "text", "text": f"e2e-health-{marker}"}],
+    last_err = ""
+    for attempt in range(1 + retries):
+        body = json.dumps({
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "message/send",
+            "params": {
+                "id": f"e2e-{marker}-{attempt}",
+                "message": {
+                    "role": "user",
+                    "parts": [{"type": "text", "text": f"e2e-health-{marker}"}],
+                },
             },
-        },
-    }).encode()
-    req = urllib.request.Request(
-        peer_url,
-        data=body,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=15) as r:
-            data = json.loads(r.read())
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as e:
-        return False, f"{type(e).__name__}: {e}"
-    status = data.get("result", {}).get("status", {})
-    state = status.get("state")
-    if state not in ("TASK_STATE_COMPLETED", "TASK_STATE_INPUT_REQUIRED"):
-        return False, f"state={state!r} (expected COMPLETED or INPUT_REQUIRED)"
-    parts = status.get("message", {}).get("parts", [])
-    if not parts:
-        return True, f"state={state}, <no agent reply text>"
-    return True, f"state={state}, reply={parts[0].get('text', '')!r}"
+        }).encode()
+        req = urllib.request.Request(
+            peer_url,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data = json.loads(r.read())
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as e:
+            last_err = f"{type(e).__name__}: {e}"
+            continue
+        status = data.get("result", {}).get("status", {})
+        state = status.get("state")
+        if state not in ("TASK_STATE_COMPLETED", "TASK_STATE_INPUT_REQUIRED"):
+            last_err = f"state={state!r} (expected COMPLETED or INPUT_REQUIRED)"
+            continue
+        parts = status.get("message", {}).get("parts", [])
+        if not parts:
+            return True, f"state={state}, <no agent reply text>"
+        return True, f"state={state}, reply={parts[0].get('text', '')!r}"
+    return False, f"after {1 + retries} attempts: {last_err}"
 
 
 def check(name: str, fn) -> bool:
