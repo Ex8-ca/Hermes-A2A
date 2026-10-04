@@ -31,11 +31,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-${{ matrix.python-version }}-
 
-      - name: Install test deps
+      - name: Install project + test deps
         run: |
           python -m pip install --upgrade pip
-          pip install pytest
-          # (No project install — the plugin is drop-in, not pip-installable on CI.)
+          # Editable install pulls the runtime deps (PyYAML, cryptography) AND
+          # the [dev] extras (pytest, pytest-asyncio). The pyproject.toml
+          # pythonpath = ["."] setting in [tool.pytest.ini_options] lets
+          # `from plugins.a2a_bridge import ...` resolve against the source
+          # tree without an install, but the runtime deps must still be
+          # importable for the tests to even collect.
+          pip install -e ".[dev]"
 
       - name: Run pytest
         run: pytest plugins/a2a_bridge/tests/ -v --tb=short
