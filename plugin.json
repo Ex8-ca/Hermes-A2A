@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "a2a-bridge",
-  "version": "0.1.0",
+  "version": "0.5.2",
   "description": "One-line inter-agent tasks over A2A for Hermes Agent. Wraps the bundled Hermes A2A platform plugin's outbound tools with reply formatting, audit-log lookup, and an approval gate before memory_share, credential_share, and config_write tasks. The plugin's actual tool registration is in-process (see plugin.yaml); this plugin.json declares the Agent Plugins v1 metadata so the package is discoverable in catalogs.",
   "author": {
     "name": "Marc Smith",
