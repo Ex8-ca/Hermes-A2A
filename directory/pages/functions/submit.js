@@ -6,7 +6,14 @@
 //
 // Wire format: see directory/worker/README.md for the signed-envelope schema.
 
-const ROOT_SYSTEM_POLICY = {
+import { validateAgentCardUrl } from "./_validate.js";
+import { canonicalize } from "./canonicalize.js";
+
+// v1: hardcoded single-operator allowlist.
+// v2: read from env.ROOT_SYSTEM_POLICY (JSON) when set, with a hardcoded
+//     fallback for backward compatibility. Multi-operator support lives
+//     in the JSON; see directory/README.md for the schema.
+const DEFAULT_ROOT_SYSTEM_POLICY = {
   version: 1,
   approvers: [
     {
@@ -15,6 +22,22 @@ const ROOT_SYSTEM_POLICY = {
     },
   ],
 };
+
+function loadRootSystemPolicy(env) {
+  if (env && env.ROOT_SYSTEM_POLICY) {
+    try {
+      const parsed = typeof env.ROOT_SYSTEM_POLICY === "string"
+        ? JSON.parse(env.ROOT_SYSTEM_POLICY)
+        : env.ROOT_SYSTEM_POLICY;
+      if (parsed && Array.isArray(parsed.approvers) && parsed.approvers.length > 0) {
+        return parsed;
+      }
+    } catch {
+      // fall through to default
+    }
+  }
+  return DEFAULT_ROOT_SYSTEM_POLICY;
+}
 
 const ALG = { name: "Ed25519", namedCurve: "Ed25519" };
 const KV_BINDING = "AGENTS";
@@ -34,19 +57,6 @@ function jsonResponse(status, body, extraHeaders = {}) {
 
 function bad(status, message, extra = {}) {
   return jsonResponse(status, { error: message, ...extra });
-}
-
-function canonicalize(obj) {
-  if (obj === null || typeof obj !== "object") return JSON.stringify(obj);
-  if (Array.isArray(obj)) {
-    return "[" + obj.map(canonicalize).join(",") + "]";
-  }
-  const keys = Object.keys(obj).sort();
-  return (
-    "{" +
-    keys.map((k) => JSON.stringify(k) + ":" + canonicalize(obj[k])).join(",") +
-    "}"
-  );
 }
 
 function b64ToBytes(b64) {
@@ -104,6 +114,7 @@ function clientIp(request) {
 }
 
 async function handleSubmit(request, env) {
+  const ROOT_SYSTEM_POLICY = loadRootSystemPolicy(env);
   if (!env[KV_BINDING]) {
     return bad(500, `${KV_BINDING} KV namespace not bound`);
   }
@@ -136,8 +147,12 @@ async function handleSubmit(request, env) {
   for (const k of required) {
     if (!(k in body)) return bad(400, `missing field: ${k}`);
   }
-  if (typeof body.agent_card_url !== "string" || !body.agent_card_url.startsWith("https://")) {
-    return bad(400, "agent_card_url must be an https:// URL");
+  if (typeof body.agent_card_url !== "string") {
+    return bad(400, "agent_card_url must be a string");
+  }
+  const urlCheck = validateAgentCardUrl(body.agent_card_url);
+  if (!urlCheck.ok) {
+    return bad(400, urlCheck.reason);
   }
   if (!Array.isArray(body.capabilities)) {
     return bad(400, "capabilities must be an array of strings");
