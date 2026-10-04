@@ -31,10 +31,62 @@ import base64
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from plugins.a2a_bridge import canonical, identity as ident_v011
 from plugins.a2a_bridge import keyring
+
+
+#: Default max envelope age in seconds. Reject any incoming envelope whose
+#: ``sent_at`` is older than ``now - MAX_ENVELOPE_AGE`` or more than
+#: ``MAX_ENVELOPE_AGE`` in the future. This bounds the replay window.
+MAX_ENVELOPE_AGE: int = 300
+
+
+def _now_utc() -> datetime:
+    """Wall-clock UTC. Replace with an injected clock in tests."""
+    return datetime.now(timezone.utc)
+
+
+def _now_iso(now_fn: Callable[[], datetime] = _now_utc) -> str:
+    return now_fn().isoformat().replace("+00:00", "Z")
+
+
+def check_replay_window(
+    sent_at: str,
+    *,
+    max_age_seconds: int = MAX_ENVELOPE_AGE,
+    now: Callable[[], datetime] = _now_utc,
+) -> None:
+    """Reject envelopes that are too old or too far in the future.
+
+    Public helper so ``slice.py`` (and any future envelope type) can
+    apply the same replay bound without duplicating the logic. Raises
+    :class:`HandshakeError` on stale or future-dated envelopes.
+
+    The default 300s window tolerates real-world clock skew but is
+    short enough to bound the blast radius of a captured envelope.
+    Operators can extend the window for slow networks via
+    ``max_age_seconds``.
+    """
+    try:
+        parsed = datetime.fromisoformat(sent_at.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        raise HandshakeError(f"sent_at is not a valid ISO 8601 timestamp: {sent_at!r}")
+    if parsed.tzinfo is None:
+        # Naive datetimes are ambiguous; refuse rather than guess.
+        raise HandshakeError(f"sent_at must be timezone-aware: {sent_at!r}")
+    delta = now() - parsed
+    if delta.total_seconds() > max_age_seconds:
+        raise HandshakeError(
+            f"envelope expired: sent_at={sent_at!r} is "
+            f"{int(delta.total_seconds())}s old (max {max_age_seconds}s)"
+        )
+    if delta.total_seconds() < -max_age_seconds:
+        raise HandshakeError(
+            f"envelope not-yet-valid: sent_at={sent_at!r} is "
+            f"{int(-delta.total_seconds())}s in the future (max {max_age_seconds}s)"
+        )
 
 
 def _check_agent_id_matches_key(agent_id: str, public_key_b64: str) -> bool:
@@ -58,21 +110,24 @@ def build_introduce(
     consent_until: Optional[str] = None,
     ttl_days: int = 30,
     local_identity: Optional[keyring.Identity] = None,
+    now: Callable[[], datetime] = _now_utc,
 ) -> Dict[str, Any]:
     """Build + sign an outgoing introduce envelope.
 
     The local identity is loaded (or generated) on first use; pass
-    ``local_identity`` to inject one (handy in tests).
+    ``local_identity`` to inject one (handy in tests). Pass ``now``
+    to inject a clock (handy for testing replay protection).
     """
     ident = local_identity or keyring.load_or_create()
     if consent_until is None:
-        consent_until = (datetime.now(timezone.utc) + timedelta(days=ttl_days)).isoformat().replace("+00:00", "Z")
+        consent_until = (now() + timedelta(days=ttl_days)).isoformat().replace("+00:00", "Z")
     envelope: Dict[str, Any] = {
         "method": "introduce",
         "from": ident.agent_id,
         "agent_card_url": agent_card_url,
         "public_key": ident.public_key_b64,
         "intent": intent,
+        "sent_at": _now_iso(now),
         "consent_until": consent_until,
     }
     envelope["signature"] = ident.sign(canonical.canonical_bytes(envelope))
@@ -86,6 +141,7 @@ def build_introduce_ack(
     consent_until: Optional[str] = None,
     ttl_days: int = 30,
     local_identity: Optional[keyring.Identity] = None,
+    now: Callable[[], datetime] = _now_utc,
 ) -> Dict[str, Any]:
     """Build + sign an outgoing introduce_ack envelope.
 
@@ -96,13 +152,14 @@ def build_introduce_ack(
     """
     ident = local_identity or keyring.load_or_create()
     if consent_until is None:
-        consent_until = (datetime.now(timezone.utc) + timedelta(days=ttl_days)).isoformat().replace("+00:00", "Z")
+        consent_until = (now() + timedelta(days=ttl_days)).isoformat().replace("+00:00", "Z")
     envelope: Dict[str, Any] = {
         "method": "introduce_ack",
         "from": ident.agent_id,
         "agent_card_url": agent_card_url,
         "public_key": ident.public_key_b64,
         "granted": list(granted),
+        "sent_at": _now_iso(now),
         "consent_until": consent_until,
     }
     envelope["signature"] = ident.sign(canonical.canonical_bytes(envelope))
@@ -113,18 +170,39 @@ class HandshakeError(ValueError):
     """Raised when an envelope is malformed, unsigned, or unverifiable."""
 
 
-def parse_incoming(envelope: Dict[str, Any]) -> Dict[str, Any]:
+def parse_incoming(
+    envelope: Dict[str, Any],
+    *,
+    max_age_seconds: int = MAX_ENVELOPE_AGE,
+    now: Callable[[], datetime] = _now_utc,
+) -> Dict[str, Any]:
     """Validate an incoming handshake envelope.
 
     Returns the envelope with the ``signature`` field removed (it has
     been verified). Raises :class:`HandshakeError` for any failure.
+
+    The optional ``max_age_seconds`` argument bounds the replay
+    window. Any envelope whose ``sent_at`` is older than
+    ``now - max_age_seconds`` or more than ``max_age_seconds`` in
+    the future is refused. The default 300s window tolerates
+    real-world clock skew but is short enough to bound the
+    blast radius of a captured envelope.
+
+    Pass ``now`` to inject a clock (handy in tests).
     """
     if not isinstance(envelope, dict):
         raise HandshakeError("envelope must be a JSON object")
     method = envelope.get("method")
     if method not in ("introduce", "introduce_ack"):
         raise HandshakeError(f"unexpected method: {method!r}")
-    for required in ("from", "agent_card_url", "public_key", "consent_until", "signature"):
+    for required in (
+        "from",
+        "agent_card_url",
+        "public_key",
+        "consent_until",
+        "sent_at",
+        "signature",
+    ):
         if required not in envelope:
             raise HandshakeError(f"missing required field: {required}")
     agent_id = str(envelope["from"])
@@ -137,6 +215,9 @@ def parse_incoming(envelope: Dict[str, Any]) -> Dict[str, Any]:
     message = canonical.canonical_bytes(envelope)
     if not keyring.Identity.verify(public_key, message, sig):
         raise HandshakeError("signature did not verify against public_key")
+    # Replay-window check goes last so the caller can still log
+    # *what* they would have accepted before deciding it's too old.
+    check_replay_window(str(envelope["sent_at"]), max_age_seconds=max_age_seconds, now=now)
     # Strip the signature for the caller; they have a verified envelope.
     return {k: v for k, v in envelope.items() if k != "signature"}
 

@@ -171,7 +171,6 @@ class TestRoundTrip:
         # A's owner says: meet B with read_public. B verifies and replies.
         verified = handshake.parse_incoming(a_intro)
         assert verified["from"] == ident.agent_id
-
         b_ack = handshake.build_introduce_ack(
             agent_card_url="https://b.example.com:9900",
             granted=["read_public"],
@@ -180,3 +179,71 @@ class TestRoundTrip:
         verified_ack = handshake.parse_incoming(b_ack)
         assert verified_ack["granted"] == ["read_public"]
         assert verified_ack["from"] == b.agent_id
+
+    def test_replay_window_stale_envelope_rejected(self, ident: keyring.Identity) -> None:
+        # Capture an envelope at t=0, then advance the receiver's clock
+        # past max_age_seconds; the same envelope must reject.
+        env = handshake.build_introduce(
+            agent_card_url="https://example.com:9900",
+            intent="hi",
+            local_identity=ident,
+            now=lambda: datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+        # Receiver's clock has advanced 6 minutes; the envelope is now
+        # 360s old, past the 300s default.
+        with pytest.raises(handshake.HandshakeError, match="expired"):
+            handshake.parse_incoming(
+                env, now=lambda: datetime(2026, 1, 1, 0, 6, tzinfo=timezone.utc)
+            )
+
+    def test_replay_window_future_dated_envelope_rejected(self, ident: keyring.Identity) -> None:
+        # Capture an envelope with a clock 10 minutes in the future
+        # (sender clock skew). Receiver's clock is current; the future
+        # date is past the 300s default.
+        env = handshake.build_introduce(
+            agent_card_url="https://example.com:9900",
+            intent="hi",
+            local_identity=ident,
+            now=lambda: datetime(2026, 1, 1, 0, 10, tzinfo=timezone.utc),
+        )
+        with pytest.raises(handshake.HandshakeError, match="not-yet-valid"):
+            handshake.parse_incoming(
+                env, now=lambda: datetime(2026, 1, 1, tzinfo=timezone.utc)
+            )
+
+    def test_replay_window_accepts_within_tolerance(self, ident: keyring.Identity) -> None:
+        # Within 300s of the receiver's clock the envelope is fine.
+        env = handshake.build_introduce(
+            agent_card_url="https://example.com:9900",
+            intent="hi",
+            local_identity=ident,
+            now=lambda: datetime(2026, 1, 1, 0, 4, tzinfo=timezone.utc),  # 4m skew
+        )
+        verified = handshake.parse_incoming(
+            env, now=lambda: datetime(2026, 1, 1, tzinfo=timezone.utc)
+        )
+        assert verified["from"] == ident.agent_id
+
+    def test_replay_window_custom_max_age(self, ident: keyring.Identity) -> None:
+        # Operators can extend the window for slow networks.
+        env = handshake.build_introduce(
+            agent_card_url="https://example.com:9900",
+            intent="hi",
+            local_identity=ident,
+            now=lambda: datetime(2026, 1, 1, 0, 30, tzinfo=timezone.utc),
+        )
+        # 30 minutes old, default 300s = rejected
+        with pytest.raises(handshake.HandshakeError, match="expired"):
+            handshake.parse_incoming(
+                env,
+                max_age_seconds=60,
+                now=lambda: datetime(2026, 1, 1, 1, 0, tzinfo=timezone.utc),
+            )
+        # ...but accepted if we set max_age=3600
+        verified = handshake.parse_incoming(
+            env,
+            max_age_seconds=3600,
+            now=lambda: datetime(2026, 1, 1, 1, 0, tzinfo=timezone.utc),
+        )
+        assert verified["from"] == ident.agent_id
+
