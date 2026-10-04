@@ -165,7 +165,17 @@ async function handleSubmit(request, env) {
   const canonical = canonicalize(signed);
   const messageBytes = new TextEncoder().encode(canonical);
 
+  // v1: any operator in ROOT_SYSTEM_POLICY can sign.
+  // v2: if the agent_id already has an entry, the agent's own stored
+  //     public_key can also sign an update. The signature must match
+  //     the stored public_key (immutability — see the check below).
+  //     The agent's "approved_by" in this case is the agent_id itself,
+  //     since the agent is the one attesting.
+  const existingRaw = await env[KV_BINDING].get(`agent:${body.agent_id}`);
+  const existing = existingRaw ? JSON.parse(existingRaw) : null;
+
   let approvedBy = null;
+  // Try operator signatures first.
   for (const approver of ROOT_SYSTEM_POLICY.approvers) {
     let ok = false;
     try {
@@ -178,8 +188,32 @@ async function handleSubmit(request, env) {
       break;
     }
   }
+  // v2: fall back to the agent's own stored public_key (self-sign).
+  if (!approvedBy && existing && existing.public_key) {
+    let ok = false;
+    try {
+      ok = await verifySignature(existing.public_key, messageBytes, signature);
+    } catch (e) {
+      // fall through
+    }
+    if (ok) {
+      // v2 immutability: the public_key field of an update MUST match
+      // the stored entry. Otherwise an attacker who stole the
+      // signature capability could pivot the entry to a new key
+      // they control. The agent_id stays fixed; the public_key stays
+      // fixed. To rotate a key, the operator must submit a fresh entry
+      // (which is currently a delete-and-recreate — see v2.1 roadmap).
+      if (existing.public_key !== body.public_key) {
+        return bad(
+          403,
+          `public_key on update (${body.public_key}) does not match stored entry's public_key; key rotation requires operator intervention`,
+        );
+      }
+      approvedBy = { name: `self:${body.agent_id}` };
+    }
+  }
   if (!approvedBy) {
-    return bad(403, "signature did not verify against any approver in ROOT_SYSTEM_POLICY");
+    return bad(403, "signature did not verify against any approver in ROOT_SYSTEM_POLICY, nor against the stored entry's public_key");
   }
 
   let headOk = false;
