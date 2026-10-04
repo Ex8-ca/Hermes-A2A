@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hermes-a2a-bridge"
-version = "0.2.0"
+version = "0.3.0"
 description = "One-line inter-agent tasks over A2A — wraps the bundled Hermes A2A platform plugin's outbound tools with reply formatting, audit-log lookup, and an approval gate for sensitive tasks."
 readme = "README.md"
 license = {text = "MIT"}
@@ -60,7 +60,7 @@ include-package-data = true
 "src" = ["hermes_a2a_bridge/py.typed"]
 
 [tool.pytest.ini_options]
-testpaths = ["src/hermes_a2a_bridge/tests", "plugins/a2a_bridge/tests"]
+testpaths = ["src/hermes_a2a_bridge/tests", "plugins/a2a_bridge/tests", "directory/tests"]
 python_files = ["test_*.py", "*_test.py"]
 addopts = "-ra --strict-markers"
 
