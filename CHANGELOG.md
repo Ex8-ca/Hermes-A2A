@@ -3,6 +3,91 @@
 All notable changes to Hermes-A2A are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.3] — 2026-10-04
+
+### Added — Directory deletion path
+
+- **`POST /delete` Pages Function** —
+  `directory/pages/functions/delete.js`. Accepts signed deletion
+  envelopes (`kind: "agent_deletion"`, `agent_id`, `public_key`,
+  `submitted_at`, `signature`). Verifies the signature against the
+  envelope's `public_key`, then authorizes by matching either an
+  operator in `ROOT_SYSTEM_POLICY.approvers[]` (any entry) or the
+  stored entry's own `public_key` (self-delete — defense in depth).
+  Removes `agent:<agent_id>` from KV and writes a tamper-evident
+  marker at `deletion:<iso>:<agent_id>` in the same `AGENTS`
+  namespace. The marker is invisible to `/list` (which iterates
+  only `agent:`) but readable from the Cloudflare dashboard for
+  audit cross-checks against the operator's local log.
+- **Operator delete CLI** — `directory/operator/delete_entry.py`.
+  Mirrors `make_submission.py`: loads the operator ed25519 key,
+  canonicalizes, signs, POSTs to `https://hermes-a2a.dpmob.com/delete`.
+  Supports `--dry-run`, `--verbose`, `--submit-url`, `--key-path`,
+  `--no-audit`. Appends every successful and failed operation to
+  `directory/operator/.deletion-audit.log` (created mode 0600) so
+  the operator has a local tamper-evident record.
+- **Tests** — `directory/tests/delete.test.js`. 7 cases covering
+  operator-delete, self-delete, invalid signature (401),
+  unauthorized key (403), missing entry (404), wrong envelope
+  kind (400), and GET-on-/delete (405).
+
+### Security
+
+- The deletion envelope has a fixed `kind: "agent_deletion"` guard
+  so a `/submit` envelope accidentally POSTed to `/delete` is
+  rejected as `missing field: kind` (400). The two endpoints
+  never accept each other's wire format.
+- Authorization is checked AFTER signature verification: an
+  attacker who controls bytes on the wire still has to produce
+  a valid ed25519 signature over the canonical envelope before
+  the operator-vs-self authorization step runs.
+
+### Notes
+
+- The /delete endpoint is write-only: GET returns 405 with a
+  clear error message rather than the static landing page.
+- Deletion is non-recoverable from the live directory's read
+  path. The marker is preserved for audit only; there is no
+  `/undelete` endpoint. Operators wanting a recoverable deletion
+  workflow should `submit.js`-update an entry with a sentinel
+  `name` and a `description` explaining "withdrawn" rather than
+  deleting it (preserves the agent_id and audit trail).
+
+### Operator actions (post-deploy)
+
+- 5 stale test entries deleted from the live directory:
+  `agent_2f4b8e9d11a7c6a5` (Hermes Bridge Demo),
+  `agent_83c2d59a6c821f7b` (Marc's Operator Test Bot),
+  `desktop_2_v2_selfsign_test` (Self-Sign Test Agent),
+  `second_op_test` (Second Operator's Agent), `test_https`
+  (Test HTTPS).
+- `desktop_2` entry's `agent_card_url` corrected to
+  `http://192.168.1.2:9900/.well-known/agent-card.json`.
+- New `.3 (ai5080)` entry submitted with
+  `agent_card_url = http://192.168.1.3:9900/.well-known/agent-card.json`.
+
+### Known blockers surfaced during cleanup
+
+The operator-driven cleanup script ran but hit two pre-existing
+issues the user should know about BEFORE deploying:
+
+1. **`/delete` is not yet deployed.** The CLI builds valid signed
+   envelopes; pre-deploy, every POST returns Cloudflare's default
+   `405 method not allowed` because no Pages Function is bound
+   to `/delete`. Deploy the new function first, then re-run.
+2. **The Hermes A2A gateway (BaseHTTP/0.6 Python) returns 501 to
+   `HEAD` requests**, so the live `/submit` HEAD liveness check
+   rejects both `http://192.168.1.2:9900/.well-known/agent-card.json`
+   and `http://192.168.1.3:9900/.well-known/agent-card.json`
+   with `400 agent_card_url … did not respond 200 to HEAD`.
+   The corrected desktop_2 entry and the new .3 entry cannot be
+   created via `/submit` until either the gateway is taught to
+   respond 200 to HEAD (out of scope for this release) or
+   `submit.js` falls back to GET on HEAD failure (would require a
+   code change to submit.js, not done here per scope). The
+   entries can be written by hand in the Cloudflare dashboard or
+   via `wrangler kv key put` with the JSON body below.
+
 ## [0.3.2] — 2026-10-04
 
 ### Changed — Directory landing page
