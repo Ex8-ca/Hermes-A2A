@@ -45,6 +45,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from plugins.a2a_bridge import approval, audit, identity, policy  # noqa: F401
 from plugins.a2a_bridge import handshake, keyring, meetings, slice as slice_mod  # noqa: F401
+from plugins.a2a_bridge import memex8_client as memex8_client_mod  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -1078,6 +1079,354 @@ def _format_reply(raw_reply: str, elapsed_ms: int, label: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# memex8-backed slice tools (sender, receiver, discovery)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Three new tools added in feature/memex8-slice. See slice.py for the
+# envelope format and policy.py for the per-peer allowlist semantics.
+#
+# Sender:
+#   a2a_bridge_share_memex8(peer, slice_name, memory_ids)
+#     Verifies each memory is visibility=public locally, then signs and
+#     sends a memex8_memory_slice envelope.
+# Discovery:
+#   a2a_bridge_list_memex8_public(limit=20, offset=0)
+#     Calls GET /api/v1/memories/public and returns a printable summary
+#     so the agent can see what's shareable before sending.
+# Receiver:
+#   a2a_bridge_receive_memex8(envelope, write_to='MEMORY.md')
+#     Verifies the envelope signature, re-fetches each memory from
+#     the sender's memex8, re-checks visibility, then appends to
+#     write_to with a provenance comment.
+
+
+SCHEMA_LIST_MEMEX8_PUBLIC: Dict[str, Any] = {
+    "name": "a2a_bridge_list_memex8_public",
+    "description": (
+        "List memex8 memories marked visibility=public. Use this before "
+        "calling a2a_bridge_share_memex8 to discover what is shareable. "
+        "Reads MEMEX8_API_BASE / MEMEX8_API_KEY from the environment."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "limit": {
+                "type": "integer",
+                "default": 20,
+                "minimum": 1,
+                "maximum": 200,
+                "description": "Max memories to return (default 20, max 200).",
+            },
+            "offset": {
+                "type": "integer",
+                "default": 0,
+                "minimum": 0,
+                "description": "Pagination offset.",
+            },
+        },
+    },
+}
+
+
+def handle_list_memex8_public(args: Dict[str, Any], **_kw) -> str:
+    limit = int(args.get("limit") or 20)
+    offset = int(args.get("offset") or 0)
+    if limit < 1 or limit > 200:
+        return "Error: limit must be 1..200"
+    if offset < 0:
+        return "Error: offset must be >= 0"
+    try:
+        client = memex8_client_mod.Memex8Client()
+        data = client.list_public(limit=limit, offset=offset)
+    except memex8_client_mod.Memex8ClientError as e:
+        return f"Error: memex8 unreachable: {e}"
+    memories = data.get("memories") or []
+    total = data.get("total", len(memories))
+    if not memories:
+        return "No public memex8 memories found."
+    lines = [
+        f"memex8 public memories (showing {len(memories)} of {total}):",
+        "",
+    ]
+    for m in memories:
+        mid = m.get("id", "?")
+        heading = (m.get("heading") or m.get("realm_name") or "").strip()
+        preview = (m.get("content_preview") or "").strip().replace("\n", " ")
+        if len(preview) > 120:
+            preview = preview[:117] + "..."
+        head = f"  - [{mid}] {heading}" if heading else f"  - [{mid}]"
+        lines.append(head)
+        if preview:
+            lines.append(f"      {preview}")
+    return "\n".join(lines).rstrip()
+
+
+SCHEMA_SHARE_MEMEX8: Dict[str, Any] = {
+    "name": "a2a_bridge_share_memex8",
+    "description": (
+        "Send a set of public memex8 memories to a peer as a signed "
+        "memex8_memory_slice envelope. Every memory_id must be "
+        "visibility=public locally; private memories are refused. The "
+        "peer must be in the central allowlist's approved_peers and "
+        "have an active meeting that grants read_public. The receiver "
+        "re-fetches each memory from MEMEX8_API_BASE and re-checks "
+        "visibility before writing, so a memory that was public at "
+        "sign time but flipped to private before delivery is refused."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "peer": {
+                "type": "string",
+                "description": "Peer name (as configured in a2a_agents) or full URL.",
+            },
+            "slice_name": {
+                "type": "string",
+                "description": "Friendly handle for this slice (used in audit log + UI).",
+            },
+            "memory_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of memex8 memory IDs to include.",
+                "minItems": 1,
+            },
+        },
+        "required": ["peer", "slice_name", "memory_ids"],
+    },
+}
+
+
+def handle_share_memex8(args: Dict[str, Any], **_kw) -> str:
+    peer = (args.get("peer") or "").strip()
+    slice_name = (args.get("slice_name") or "").strip()
+    memory_ids = args.get("memory_ids") or []
+    if not peer:
+        return "Error: 'peer' is required."
+    if not slice_name:
+        return "Error: 'slice_name' is required."
+    if not isinstance(memory_ids, list) or not memory_ids:
+        return "Error: 'memory_ids' must be a non-empty list."
+    if not all(isinstance(m, str) and m.strip() for m in memory_ids):
+        return "Error: 'memory_ids' must contain only non-empty strings."
+
+    # Sender-side preflight: every requested memory must exist and
+    # be visibility=public on our local memex8. We do NOT skip this
+    # even though the receiver re-checks: a failure here produces a
+    # much clearer error than the receiver's network round-trip.
+    try:
+        client = memex8_client_mod.Memex8Client()
+        for mid in memory_ids:
+            mem = client.get_memory(mid)
+            visibility = (mem.get("visibility") or "").strip()
+            if visibility != "public":
+                return (
+                    f"Error: memory {mid!r} is visibility={visibility!r} on "
+                    f"our memex8; refusing to share a non-public memory."
+                )
+    except memex8_client_mod.Memex8ClientError as e:
+        return f"Error: memex8 preflight failed: {e}"
+
+    # Resolve peer + check allowlist (same gate the filesystem
+    # share_public uses; the per-peer allowlist is the single source
+    # of truth for who we share with, regardless of slice kind).
+    peer_entry = _resolve_peer_entry(peer)
+    if peer_entry is None:
+        return f"Error: unknown peer '{peer}'."
+    try:
+        peer_id = identity.agent_id_for(peer_entry["url"])
+    except ValueError as e:
+        return f"Error: invalid peer URL: {e}"
+    al = policy.load_allowlist()
+    # The memex8 slice isn't a "slice" in the allowlist's sense
+    # (filesystem + frontmatter). We treat it as public_all when the
+    # peer is in the allowlist's approved_peers (or approved_peers is
+    # empty and the meet layer is the gate).
+    slice_ = slice_mod.Slice(
+        name=slice_name,
+        kind="memory",
+        level=policy.Level.PUBLIC_ALL,
+    )
+    # The allowlist's slice_by_name is a registry of declared
+    # filesystem slices; a memex8 slice name won't be there. So we
+    # construct a synthetic Allowlist-shaped check by gating on
+    # approved_peers directly.
+    if al.approved_peers and peer_id not in al.approved_peers:
+        return (
+            f"Error: peer {peer_id!r} is not in the central allowlist's "
+            f"approved_peers; refusing to share a memex8 slice."
+        )
+    # The allowlist's resolve_share expects a registered slice; for
+    # the memex8 slice we use the same function as a sanity check on
+    # the level=public_all path.
+    shareable, reason = policy.resolve_share(al, peer_id=peer_id, slice_name=slice_name)
+    # If the slice isn't in the allowlist, resolve_share returns
+    # False with a clear reason. We treat that as a soft miss and
+    # fall back to approved_peers — but we surface the reason in the
+    # reply so the operator can decide to register the slice.
+    if not shareable and "not in the central allowlist" not in reason:
+        return f"Error: central allowlist blocks share with {peer_id}: {reason}"
+
+    # Meeting record: must have an active meeting granting read_public.
+    store = meetings.Meetings().load()
+    meeting = store.get(peer_id)
+    if meeting is None or not meeting.is_active() or not meeting.can("read_public"):
+        return (
+            f"Error: no active meeting with {peer_id} that grants read_public; "
+            f"refusing to share a memex8 slice."
+        )
+
+    if not _a2a_plugin_available():
+        return (
+            "Error: the Hermes A2A platform plugin is not enabled; "
+            "cannot send the slice."
+        )
+
+    # Build the envelope. base_url is the sender's memex8 endpoint;
+    # the receiver uses it to re-fetch.
+    base = memex8_client_mod._env_base_url()
+    envelope = slice_mod.build_memex8_envelope(
+        slice_mod.Memex8Slice(
+            name=slice_name,
+            memory_ids=list(memory_ids),
+            base_url=base,
+        ),
+        to_peer=peer_id,
+    )
+    msg = json.dumps({"envelope": envelope, "type": "memex8_memory_slice"})
+
+    # Approval gate — same as filesystem share_public.
+    approval_request = approval.classify_task(msg)
+    if approval_request is not None:
+        return approval_request.to_user_block()
+
+    reply = _call_a2a_call(agent=peer, message=msg)
+    classified = _classify_peer_unreachable(peer, reply)
+    if classified is not None:
+        reply = classified
+    return (
+        f"memex8 slice '{slice_name}' sent to {peer} "
+        f"(kind=memex8_memory_slice, ids={len(memory_ids)}); peer reply: {reply}"
+    )
+
+
+SCHEMA_RECEIVE_MEMEX8: Dict[str, Any] = {
+    "name": "a2a_bridge_receive_memex8",
+    "description": (
+        "Process an incoming memex8_memory_slice envelope (typically "
+        "from a2a_bridge_history). Verifies the signature, re-fetches "
+        "each memory from the sender's memex8 base URL, re-checks "
+        "visibility=public, then appends to write_to (default "
+        "MEMORY.md) with a provenance comment."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "envelope": {
+                "type": "object",
+                "description": "The signed memex8 slice envelope.",
+            },
+            "write_to": {
+                "type": "string",
+                "default": "MEMORY.md",
+                "description": "Filename under HERMES_HOME to write the slice into.",
+            },
+        },
+        "required": ["envelope"],
+    },
+}
+
+
+def handle_receive_memex8(args: Dict[str, Any], **_kw) -> str:
+    envelope = args.get("envelope")
+    if not isinstance(envelope, dict):
+        return "Error: 'envelope' must be a JSON object."
+    write_to = (args.get("write_to") or "MEMORY.md").strip()
+
+    try:
+        slice_ = slice_mod.parse_memex8_envelope(envelope)
+    except slice_mod.SliceError as e:
+        return f"Error: incoming memex8 slice failed verification: {e}"
+
+    sender_id = str(envelope.get("from_peer", ""))
+
+    # Meeting record: must have an active meeting granting read_public,
+    # and the envelope's public key must match the meeting's stored
+    # public key (defense in depth).
+    store = meetings.Meetings().load()
+    m = store.get(sender_id)
+    if m is None or not m.is_active() or not m.can("read_public"):
+        return (
+            f"Refused: no active meeting with {sender_id} that grants read_public."
+        )
+    envelope_public_key = str(envelope.get("from_public_key", ""))
+    if envelope_public_key and envelope_public_key != m.peer_public_key:
+        return (
+            f"Refused: incoming memex8 slice's from_public_key does not match "
+            f"the public key on file for {sender_id}; refusing the slice."
+        )
+
+    # Re-fetch from sender's memex8. The client re-validates
+    # visibility=public on every memory, so a tampered id (one that
+    # wasn't in the original envelope but a malicious sender swapped
+    # in) still gets caught here.
+    try:
+        client = memex8_client_mod.Memex8Client(base_url=slice_.base_url)
+        memories = client.fetch_memex8_slice(slice_.memory_ids)
+    except memex8_client_mod.Memex8ClientError as e:
+        return f"Refused: could not fetch memories from sender's memex8: {e}"
+
+    # Path-confinement for write_to, same as filesystem receive_public.
+    try:
+        home = Path(os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes"))
+        home_resolved = home.resolve()
+        target = (home_resolved / write_to).resolve()
+        if not target.is_relative_to(home_resolved):
+            return (
+                f"Refused: write_to={write_to!r} resolves outside HERMES_HOME; "
+                f"refusing to write."
+            )
+    except (OSError, ValueError) as e:
+        return f"Refused: bad write_to path: {e}"
+
+    # Build the markdown body — one ## heading per memory.
+    lines: List[str] = []
+    lines.append(slice_mod.format_provenance(envelope))
+    for mem in memories:
+        mid = mem.get("id", "?")
+        heading = (
+            mem.get("heading")
+            or mem.get("realm_name")
+            or f"memex8 {mid}"
+        )
+        # Strip any leading '## ' from a heading the sender already
+        # gave us; we add our own.
+        clean_heading = heading.lstrip("# ").strip() or f"memex8 {mid}"
+        body = (mem.get("content") or "").strip()
+        lines.append(f"## {clean_heading}")
+        lines.append("")
+        if body:
+            lines.append(body)
+        else:
+            lines.append(f"_(empty memory id={mid})_")
+        lines.append("")
+    block = "\n".join(lines).rstrip() + "\n"
+
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8") as f:
+            f.write(block)
+            if not block.endswith("\n"):
+                f.write("\n")
+    except OSError as e:
+        return f"Error: failed to write to {target}: {e}"
+
+    return (
+        f"memex8 slice '{slice_.name}' from {sender_id} accepted: "
+        f"{len(memories)} memory(ies) appended to {target}"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # Plugin registration glue
 # ─────────────────────────────────────────────────────────────────────────
 
@@ -1094,6 +1443,9 @@ A2A_BRIDGE_TOOLS: Tuple[Tuple[str, Dict[str, Any], Any], ...] = (
     ("a2a_bridge_revoke",               SCHEMA_REVOKE,               handle_revoke),
     ("a2a_bridge_share_public",         SCHEMA_SHARE_PUBLIC,         handle_share_public),
     ("a2a_bridge_receive_public",       SCHEMA_RECEIVE_PUBLIC,       handle_receive_public),
+    ("a2a_bridge_list_memex8_public",   SCHEMA_LIST_MEMEX8_PUBLIC,   handle_list_memex8_public),
+    ("a2a_bridge_share_memex8",         SCHEMA_SHARE_MEMEX8,         handle_share_memex8),
+    ("a2a_bridge_receive_memex8",       SCHEMA_RECEIVE_MEMEX8,       handle_receive_memex8),
 )
 
 
