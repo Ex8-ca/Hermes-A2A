@@ -3,6 +3,92 @@
 All notable changes to Hermes-A2A are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.1] — 2026-10-04
+
+### Added — Directory transport classification
+
+The directory's per-agent entries gain an optional `transport` field
+that classifies the agent_card_url as one of four values:
+
+- `tailscale-magicdns` — host is a Tailscale MagicDNS name (`*.ts.net`)
+- `lan` — host is RFC1918 / loopback / link-local / ULA / Tailscale
+  `100.64/10` (private network)
+- `https` — public HTTPS endpoint
+- `http-public` — plain HTTP to a public host (rare; `submit.js`
+  refuses this at submit time, so this value only appears for
+  manually-created or migrated entries)
+
+**Operator-side:** no change. `make_submission.py --auto-tailscale`
+and the manual workflow do not need a `--transport` flag — `submit.js`
+infers the value from `agent_card_url` via the new `classifyTransport()`
+function in `pages/functions/_validate.js`. A manual `transport`
+field in the request body overrides the inference (allowed for
+backward compat with v0.3.x operators who wrote entries by hand);
+values outside the four-class allowlist are rejected with HTTP 400.
+
+**Discoverer-side:** the `/list` JSON endpoint accepts an optional
+`?transport=<value>` query parameter. When present, the response
+filters to entries whose `entry.transport` matches (case-insensitive).
+When absent, `/list` returns all entries unchanged (the prior contract).
+
+**Per-agent SSR pages** render a small `.transport-chip` next to the
+agent name when `entry.transport` is set. Pre-v0.4.1 entries (the
+two live entries: `desktop_2` and `ai5080`) don't have the field and
+render with no chip — they will pick up the chip the next time
+they're re-submitted, since the inference runs from the URL.
+
+CSS adds `.transport-chip` (base) + `.transport-tailscale-magicdns`
+(cyan, matching `--accent-cyan`), `.transport-lan` (gray,
+`--text-secondary`), and `.transport-https` (green, `#22c55e`).
+`http-public` falls back to the base style (rarely rendered).
+Subtle palette consistent with the existing `.cap-chip`.
+
+The two render paths:
+
+1. **Build-time** — `directory/render.mjs` (called from
+   `directory/render_agents.py` → `render_one.mjs`) bakes the chip
+   into the per-agent HTML when `entry.transport` is set, or leaves
+   the chip `hidden` when not.
+2. **Request-time** — the inline `<script>` in
+   `directory/pages/agent/_template.html` (which fetches `/list` to
+   pick up fresh `last_verified`) also populates the chip. Same
+   allowlist check; the chip stays `hidden` for legacy entries that
+   lack the field.
+
+### Tests
+
+- 6 new tests in
+  `directory/tests/validate.test.js` cover `classifyTransport()`
+  end-to-end: `*.ts.net` (tailscale-magicdns), Tailscale IP
+  `100.64/10` (lan), RFC1918 `192.168.x` and `10.x` (lan), public
+  HTTPS (https), plain HTTP to a public IP (http-public), and the
+  malformed/null-URL paths (returns null).
+- 2 new tests in `directory/tests/submit.test.js` prove the
+  submit.js integration: a tailnet URL with no explicit `transport`
+  gets `tailscale-magicdns` stored, and a LAN URL with an explicit
+  `transport: "lan"` stores that value verbatim.
+- 3 new tests in `directory/tests/list.test.js` (a new file) cover
+  the `?transport=` filter: unfiltered returns all, filtered
+  returns only matching, and the filter is case-insensitive.
+- 1 new test in `directory/tests/render-agents.test.js` proves the
+  transport chip is baked into the per-agent HTML when
+  `entry.transport` is set, and stays hidden when it isn't.
+
+Total Node tests: 55 (was 43). Plugin (201) and directory Python
+tests (13) unchanged.
+
+### Notes
+
+- The change is **purely additive**. Existing entries without a
+  `transport` field still work; the field is inferred on the next
+  re-submission. The `/list` endpoint returns them all on
+  unfiltered calls; a filtered call simply won't match them.
+- The schema change is additive at the wire level: the directory's
+  schema section in `directory/README.md` will gain a `transport`
+  row in the table.
+- No new dependencies. No new functions or tools beyond
+  `classifyTransport()`.
+
 ## [0.4.0] — 2026-10-04
 
 ### Added — Tailscale discoverability for the directory

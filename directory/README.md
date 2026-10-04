@@ -116,6 +116,12 @@ Two JSON endpoints serve the catalog:
   }
   ```
 
+  Optional query parameter (v0.4.1): **`?transport=<value>`**
+  filters the response to entries whose `transport` field matches
+  the value (case-insensitive). Recognized values are
+  `tailscale-magicdns`, `lan`, `https`, `http-public`. Absent
+  param = return all entries (the prior contract).
+
 ### 3. Per-agent pages
 
 `/agent/<agent_id>.html` — one static HTML file per agent,
@@ -146,6 +152,7 @@ Every entry in `agents[]` has these fields:
 | `declared_at`     | string   | yes      | ISO-8601 UTC timestamp of when the agent was first submitted.            |
 | `last_verified`   | string   | added    | ISO-UTC; set by the Worker every time the entry is re-submitted.         |
 | `approved_by`     | string   | added    | Display name of the approver (from `ROOT_SYSTEM_POLICY`).                 |
+| `transport`       | string   | added (v0.4.1) | One of `tailscale-magicdns`, `lan`, `https`, `http-public`. Inferred from `agent_card_url` by `classifyTransport()` at submit time; a manual value in the request body overrides the inference (must be in the allowlist). Pre-v0.4.1 entries lack the field — they keep working on `/list` (unfiltered calls return them all) and the per-agent SSR pages render with no transport chip until they're re-submitted. |
 
 `agent_card_url` is what a client actually connects to in order
 to start a meeting; the directory never proxies it. The directory

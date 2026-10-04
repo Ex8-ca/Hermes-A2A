@@ -16,7 +16,7 @@ function jsonResponse(status, body) {
 }
 
 export async function onRequestGet(context) {
-  const { env } = context;
+  const { request, env } = context;
   if (!env[KV_BINDING]) {
     return jsonResponse(500, { error: `${KV_BINDING} KV namespace not bound` });
   }
@@ -30,5 +30,28 @@ export async function onRequestGet(context) {
       } catch {}
     }
   }
-  return jsonResponse(200, { version: 1, count: agents.length, agents });
+
+  // v0.4.1: optional ?transport= filter. Case-insensitive match against
+  // entry.transport (which is set by submit.js from the inference in
+  // classifyTransport()). Absent param = no filtering (return all).
+  // Entries without a transport field (e.g. pre-v0.4.1 live entries
+  // like desktop_2 and ai5080) are still returned on unfiltered calls;
+  // they simply won't match a transport-filtered call until they're
+  // re-submitted.
+  let transportFilter = null;
+  try {
+    const url = new URL(request.url);
+    const t = url.searchParams.get("transport");
+    if (t && t.length > 0) {
+      transportFilter = t.toLowerCase();
+    }
+  } catch {
+    // request.url is opaque or invalid; treat as no filter.
+  }
+  const filtered = transportFilter == null
+    ? agents
+    : agents.filter((a) => typeof a.transport === "string"
+        && a.transport.toLowerCase() === transportFilter);
+
+  return jsonResponse(200, { version: 1, count: filtered.length, agents: filtered });
 }

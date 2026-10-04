@@ -8,7 +8,7 @@
 </head>
 <body>
   <header>
-    <h1 id="name">Loading…</h1>
+    <h1 id="name">Loading… <span id="transport-chip" class="transport-chip" hidden></span></h1>
     <p class="lede"><code id="agent-id"></code></p>
   </header>
 
@@ -90,6 +90,19 @@
         document.getElementById("card-link").href = a.agent_card_url;
         document.getElementById("card-url").textContent = a.agent_card_url;
         document.getElementById("cmd-peer").textContent = a.agent_card_url;
+
+        // v0.4.1: render the transport chip next to the agent name.
+        // Hidden by default; shown only when entry.transport is set
+        // to one of the four recognized values. Older entries (e.g.
+        // pre-v0.4.1 desktop_2 / ai5080) won't have the field and
+        // the chip stays hidden.
+        const tChip = document.getElementById("transport-chip");
+        if (a.transport &&
+            ["tailscale-magicdns", "lan", "https", "http-public"].includes(a.transport)) {
+          tChip.textContent = a.transport;
+          tChip.classList.add("transport-" + a.transport);
+          tChip.hidden = false;
+        }
 
         const ul = document.getElementById("capabilities");
         ul.innerHTML = "";

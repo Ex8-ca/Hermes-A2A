@@ -85,10 +85,28 @@ export function render(template, entry) {
     `<title>${escapeHtml(name)} — Hermes-A2A directory</title>`,
   );
 
-  // H1 name
+  // v0.4.1: transport chip SSR. The template ships with the chip
+  // <span hidden>; we unhide + populate it when entry.transport is
+  // one of the four recognized values. Older entries (pre-v0.4.1
+  // live catalog) have no transport field — the chip stays hidden
+  // and reads as if it weren't there at all.
+  const TRANSPORT_VALUES = ["tailscale-magicdns", "lan", "https", "http-public"];
+  const transport = typeof entry.transport === "string"
+    && TRANSPORT_VALUES.includes(entry.transport)
+    ? entry.transport
+    : null;
+
+  // H1 name. The template's H1 contains both the name placeholder
+  // ("Loading…") and the transport-chip span (hidden by default,
+  // unhide-and-populate below). We replace the whole block in one
+  // go to keep the chip's position correct.
+  const chipSsr = transport
+    ? `<span id="transport-chip" class="transport-chip transport-${escapeHtml(transport)}">${escapeHtml(transport)}</span>`
+    : `<span id="transport-chip" class="transport-chip" hidden></span>`;
   out = out.replace(
-    '<h1 id="name">Loading…</h1>',
-    `<h1 id="name">${escapeHtml(name)}</h1>`,
+    '<h1 id="name">Loading… <span id="transport-chip" class="transport-chip" hidden></span></h1>',
+    `<h1 id="name">${escapeHtml(name)} ${chipSsr}</h1>`,
+    1,
   );
 
   // Card link target — the SSR'd href is the real card URL so right-click

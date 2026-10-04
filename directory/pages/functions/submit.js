@@ -6,7 +6,7 @@
 //
 // Wire format: see directory/worker/README.md for the signed-envelope schema.
 
-import { validateAgentCardUrl, isPrivateOrLoopbackHost } from "./_validate.js";
+import { validateAgentCardUrl, isPrivateOrLoopbackHost, classifyTransport } from "./_validate.js";
 import { canonicalize } from "./canonicalize.js";
 
 // v1: hardcoded single-operator allowlist.
@@ -173,6 +173,25 @@ async function handleSubmit(request, env) {
     return bad(400, "capabilities must be an array of strings");
   }
 
+  // v0.4.1: derive the entry's transport from the agent_card_url
+  // (operator-side tooling doesn't set it). A manual `transport`
+  // field in the body overrides the inference — useful for
+  // backward compat with v0.3.x operators who wrote entries by
+  // hand, or for testing. Manual values must be in the allowlist.
+  const TRANSPORT_ALLOWLIST = ["tailscale-magicdns", "lan", "https", "http-public"];
+  let transport;
+  if (body.transport != null) {
+    if (!TRANSPORT_ALLOWLIST.includes(body.transport)) {
+      return bad(
+        400,
+        `transport ${body.transport} not in the allowlist (${TRANSPORT_ALLOWLIST.join(", ")})`,
+      );
+    }
+    transport = body.transport;
+  } else {
+    transport = classifyTransport(body.agent_card_url) || "https";
+  }
+
   const { signature, ...signed } = body;
   const canonical = canonicalize(signed);
   const messageBytes = new TextEncoder().encode(canonical);
@@ -280,6 +299,7 @@ async function handleSubmit(request, env) {
     declared_at: body.declared_at,
     last_verified: new Date().toISOString(),
     approved_by: approvedBy.name,
+    transport,
   };
   await env[KV_BINDING].put(`agent:${body.agent_id}`, JSON.stringify(entry));
 

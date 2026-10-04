@@ -47,6 +47,58 @@ export function validateAgentCardUrl(url) {
 }
 
 /**
+ * Classify the transport of an agent_card_url so a discoverer can
+ * see at-a-glance whether an entry is reachable over a tailnet, a
+ * LAN, or the public internet. Pure function over the URL; does
+ * NOT do DNS lookups. Used by submit.js to auto-populate the
+ * `transport` field, and exposed for unit tests.
+ *
+ * Rules (v0.4.1):
+ *  - "tailscale-magicdns" — host ends in .ts.net (operator on a Tailscale tailnet)
+ *  - "lan"               — host is RFC1918 / loopback / link-local / ULA
+ *                          / Tailscale 100.64/10 (operator on a private network)
+ *  - "https"             — scheme is https:// to a non-private host
+ *  - "http-public"       — scheme is http:// to a non-private host (rare;
+ *                          validateAgentCardUrl already refuses this at
+ *                          submit time, so seeing it here means a manually
+ *                          created one in the KV namespace)
+ *  - null                — URL is unparseable, has no host, or no scheme
+ *
+ * @param {string} url
+ * @returns {"tailscale-magicdns" | "lan" | "https" | "http-public" | null}
+ */
+export function classifyTransport(url) {
+  if (typeof url !== "string" || url.length === 0) return null;
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  const host = parsed.hostname;
+  const proto = parsed.protocol;
+  if (!host || !proto) return null;
+
+  // *.ts.net is checked before the generic private-range check so it
+  // gets its own label. isPrivateOrLoopbackHost() would also catch it
+  // and lump it under "lan"; we want the more specific tag.
+  const lower = host.toLowerCase();
+  if (lower.endsWith(".ts.net") || lower === "ts.net") {
+    return "tailscale-magicdns";
+  }
+
+  if (isPrivateOrLoopbackHost(host)) {
+    return "lan";
+  }
+
+  if (proto === "https:") return "https";
+  if (proto === "http:") return "http-public";
+
+  // Other schemes (ftp, file, ws, etc.) are not a recognized transport.
+  return null;
+}
+
+/**
  * True if the host is a loopback address or in an RFC1918 / RFC4193 private
  * range. IPv6 loopback (::1) and ULA (fc00::/7) are included; link-local
  * (fe80::/10) is included as a private network. Also matches the

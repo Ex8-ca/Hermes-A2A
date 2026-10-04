@@ -35,8 +35,14 @@ test("render bakes the agent_id into the page (regression)", () => {
 
 test("render bakes the agent's data into the page so it works without JS", () => {
   const out = render(TEMPLATE, FIXTURE_ENTRY);
-  // Name
-  assert.match(out, /<h1 id="name">X\. Y\. Zee<\/h1>/, "agent name should be baked into the H1");
+  // Name — note the H1 also contains the transport-chip span (v0.4.1).
+  // The fixture has no transport, so the chip stays hidden. Older
+  // (pre-v0.4.1) entries read identically.
+  assert.match(
+    out,
+    /<h1 id="name">X\. Y\. Zee <span id="transport-chip" class="transport-chip" hidden><\/span><\/h1>/,
+    "agent name should be baked into the H1",
+  );
   // Description
   assert.match(out, /<p id="description">A test fixture agent\.<\/p>/);
   // Capabilities
@@ -50,6 +56,24 @@ test("render bakes the agent's data into the page so it works without JS", () =>
   );
   // The link should be the visible text of the code element
   assert.match(out, /<code id="card-url">https:\/\/example\.com\/x\/card\.json<\/code>/);
+});
+
+test("render bakes a populated transport chip when entry.transport is set", () => {
+  // v0.4.1: when entry.transport is one of the four recognized values,
+  // the chip span in the H1 becomes visible and carries the variant
+  // class. When transport is missing or unrecognized, the chip stays
+  // hidden (see the test above).
+  const out = render(TEMPLATE, { ...FIXTURE_ENTRY, transport: "tailscale-magicdns" });
+  assert.match(
+    out,
+    /<span id="transport-chip" class="transport-chip transport-tailscale-magicdns">tailscale-magicdns<\/span>/,
+    "transport chip should be populated and visible when transport is set",
+  );
+  assert.doesNotMatch(
+    out,
+    /<span id="transport-chip" class="transport-chip" hidden>tailscale-magicdns/,
+    "hidden chip should not contain transport text",
+  );
 });
 
 test("render escapes user-supplied name/description to avoid HTML injection", () => {

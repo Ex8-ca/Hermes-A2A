@@ -144,3 +144,60 @@ test("submit rejects http:// to a public IP with a clear reason", async () => {
   const body = await resp.json();
   assert.match(body.error, /loopback or RFC1918/);
 });
+
+// v0.4.1: transport field is auto-populated by submit.js. The operator
+// does not need to set it; classifyTransport() infers it from the
+// agent_card_url.
+
+test("submit auto-infers transport from agent_card_url (tailscale-magicdns)", async () => {
+  globalThis.fetch = makeFetchStub([
+    "http://minisforum-desktop.taila6e2e.ts.net:9900/.well-known/agent-card.json",
+  ]);
+  const k = makeKeys();
+  const env = makeMockEnv({
+    approvers: [{ name: "Test Operator", public_key: "ed25519:" + k.pubB64 }],
+  });
+  const envelope = {
+    agent_id: "test_transport_auto",
+    name: "Test Transport Auto",
+    agent_card_url: "http://minisforum-desktop.taila6e2e.ts.net:9900/.well-known/agent-card.json",
+    public_key: "ed25519:" + k.pubB64,
+    capabilities: ["a2a_call"],
+    declared_at: "2026-10-03T19:00:00Z",
+    // Note: no `transport` field — submit.js must infer it.
+  };
+  envelope.signature = signEnvelope(envelope, k.privateKey);
+
+  const resp = await onRequestPost({ request: makeRequest(envelope), env });
+  assert.equal(resp.status, 200);
+  const stored = JSON.parse(env.AGENTS._store.get("agent:test_transport_auto"));
+  assert.equal(stored.transport, "tailscale-magicdns");
+});
+
+test("submit accepts an explicit transport override from the body", async () => {
+  globalThis.fetch = makeFetchStub([
+    "http://minisforum-desktop.taila6e2e.ts.net:9900/.well-known/agent-card.json",
+  ]);
+  const k = makeKeys();
+  const env = makeMockEnv({
+    approvers: [{ name: "Test Operator", public_key: "ed25519:" + k.pubB64 }],
+  });
+  // The envelope has agent_card_url pointing at a LAN IP, but the
+  // operator sets `transport: "lan"` explicitly (e.g. an operator who
+  // hand-wrote an envelope and wants to override inference).
+  const envelope = {
+    agent_id: "test_transport_explicit",
+    name: "Test Transport Explicit",
+    agent_card_url: "http://192.168.1.5:9900/card.json",
+    public_key: "ed25519:" + k.pubB64,
+    capabilities: ["a2a_call"],
+    declared_at: "2026-10-03T19:00:00Z",
+    transport: "lan",
+  };
+  envelope.signature = signEnvelope(envelope, k.privateKey);
+
+  const resp = await onRequestPost({ request: makeRequest(envelope), env });
+  assert.equal(resp.status, 200);
+  const stored = JSON.parse(env.AGENTS._store.get("agent:test_transport_explicit"));
+  assert.equal(stored.transport, "lan");
+});

@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateAgentCardUrl, isPrivateOrLoopbackHost } from "../pages/functions/_validate.js";
+import { validateAgentCardUrl, isPrivateOrLoopbackHost, classifyTransport } from "../pages/functions/_validate.js";
 
 test("validateAgentCardUrl accepts https://", () => {
   assert.deepEqual(
@@ -126,4 +126,59 @@ test("isPrivateOrLoopbackHost: malformed", () => {
   assert.equal(isPrivateOrLoopbackHost("not-an-ip"), false);
   assert.equal(isPrivateOrLoopbackHost("999.999.999.999"), false);
   assert.equal(isPrivateOrLoopbackHost("192.168.1"), false); // too few octets
+});
+
+// v0.4.1: classifyTransport() inference rules. The function is pure
+// over the URL string; no DNS lookups.
+
+test("classifyTransport: tailscale-magicdns for *.ts.net", () => {
+  assert.equal(
+    classifyTransport("http://minisforum-desktop.taila6e2e.ts.net:9900/.well-known/agent-card.json"),
+    "tailscale-magicdns",
+  );
+  assert.equal(
+    classifyTransport("https://foo.ts.net/card.json"),
+    "tailscale-magicdns",
+  );
+  // case-insensitive
+  assert.equal(
+    classifyTransport("https://Foo.TS.NET/card.json"),
+    "tailscale-magicdns",
+  );
+});
+
+test("classifyTransport: lan for Tailscale 100.64/10 IP (https or http)", () => {
+  // A literal Tailscale IP is private but not a MagicDNS name — it
+  // should fall into "lan", not "tailscale-magicdns".
+  assert.equal(classifyTransport("http://100.88.26.20:9900/card.json"), "lan");
+  assert.equal(classifyTransport("https://100.64.0.1/card.json"), "lan");
+});
+
+test("classifyTransport: lan for RFC1918 IPv4 (192.168.x and 10.x)", () => {
+  assert.equal(classifyTransport("http://192.168.1.2:9900/card.json"), "lan");
+  assert.equal(classifyTransport("http://10.0.0.1/card.json"), "lan");
+  assert.equal(classifyTransport("https://192.168.0.1/card.json"), "lan");
+});
+
+test("classifyTransport: https for public HTTPS endpoints", () => {
+  assert.equal(classifyTransport("https://hermes-a2a.dpmob.com/agents.json"), "https");
+  assert.equal(classifyTransport("https://example.com/card.json"), "https");
+});
+
+test("classifyTransport: http-public for plain http to a public host", () => {
+  // Public host + plain http. validateAgentCardUrl would reject this
+  // at submit time, but classifyTransport still produces a label so
+  // manually-created KV entries (pre-v0.4.1, or hand-edited) show up
+  // honestly in the catalog.
+  assert.equal(classifyTransport("http://8.8.8.8/agents.json"), "http-public");
+  assert.equal(classifyTransport("http://example.com/agents.json"), "http-public");
+});
+
+test("classifyTransport: null for invalid or empty URLs", () => {
+  assert.equal(classifyTransport(""), null);
+  assert.equal(classifyTransport("not a url"), null);
+  assert.equal(classifyTransport("://nope"), null);
+  assert.equal(classifyTransport(null), null);
+  assert.equal(classifyTransport(undefined), null);
+  assert.equal(classifyTransport(42), null);
 });

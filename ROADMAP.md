@@ -453,9 +453,17 @@ v0.3.0–v0.3.3 are tagged and live. What's actually shipped vs. what was in the
 
 Run the full A2A round-trip between `.2` and `.3` over both the LAN (`192.168.1.x:9900`) and the tailnet (`*.ts.net:9900`) to confirm v0.3.0's protocol features (replay window, cross-check, real slice fetch) work end-to-end against the live pair. Document the result.
 
-### B. Directory v0.4.1 — schema additions (low)
+### B. Directory v0.4.1 — schema additions (low) — done in v0.4.1
 
 The `agent_card_url` field currently stores any URL. Add an optional `transport` field so a discoverer can see at-a-glance whether an entry is reachable over Tailscale (`transport: "tailscale-magicdns"`) vs LAN (`transport: "lan"`) vs public HTTPS (`transport: "https"`). Pure schema; no behavior change. The directory's per-agent SSR pages would render the transport as a tag chip.
+
+Shipped in v0.4.1: `classifyTransport()` in `pages/functions/_validate.js`
+infers the value from `agent_card_url` (operator doesn't pass it);
+`/list?transport=…` is the case-insensitive filter; the per-agent
+SSR pages render a subtle `.transport-chip` next to the agent name
+(cyan for tailscale-magicdns, green for https, gray for lan). Existing
+pre-v0.4.1 entries (desktop_2, ai5080) keep working — they pick up
+the chip the next time they're re-submitted.
 
 ### C. v0.4.1 — directory v2 transport fallback (low)
 
