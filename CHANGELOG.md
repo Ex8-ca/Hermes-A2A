@@ -3,6 +3,65 @@
 All notable changes to Hermes-A2A are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.3] — 2026-10-04
+
+### Added — Peer-unreachable error UX
+
+When the Hermes A2A platform's `a2a_call` returns a generic
+network-error string ("urlopen error timed out", "Connection
+refused", "Name or service not known", etc.) and the peer URL
+points at a Tailscale MagicDNS name or a private/LAN address,
+the user used to see a cryptic urllib-style message with no hint
+about what network they need to be on. The new
+`_classify_peer_unreachable()` helper in `tools.py` substitutes a
+contextual error that names the specific network requirement.
+
+**The two new override messages:**
+
+- `tailscale-magicdns` → "Error: peer is on a Tailscale tailnet
+  (URL: <url>). Your host is not on that tailnet, so the A2A call
+  could not reach it. Run `tailscale status` to check your tailnet
+  membership, or ask the peer operator to add your host to the
+  tailnet's ACL. (Original error: <raw>)"
+
+- `lan` → "Error: peer is on a private network (URL: <url>;
+  RFC1918 / loopback / link-local / Tailscale CGNAT). Your host is
+  not on the same network, so the A2A call could not reach it.
+  Confirm your machine is on the same LAN, VPN, or Tailscale
+  tailnet as the peer. (Original error: <raw>)"
+
+**What is NOT overridden:**
+
+- Public URLs (`https://example.com` etc.) — the platform's
+  generic error is fine; the issue is the URL itself, not the
+  caller's network.
+- Auth errors (`rejected auth`, HTTP 401/403) — these are
+  credentials problems and the platform's message is more
+  specific to the fix path.
+- Successful replies — passthrough as before.
+
+**Where it's applied:**
+
+- `handle_send` — the main `a2a_bridge_send` path
+- `handle_confirm` — the post-approval send path
+- `handle_introduce` — sending an `introduce` envelope
+- `handle_introduce_respond` — sending an `introduce_ack`
+- `handle_share_public` — delivering a memory slice envelope
+
+`handle_receive_public` (inbound) is not touched — it doesn't
+make outbound HTTP calls.
+
+**Classification helper:** `_is_private_or_loopback_url(peer_url)`
+classifies a URL into one of three classes (`tailscale-magicdns`
+| `lan` | `public`). It uses Python stdlib's `ipaddress` module
+for IPv4/IPv6 ranges (with manual handling of the Tailscale
+`100.64/10` CGNAT range, which stdlib doesn't know about) and
+excludes the IPv6 documentation range (`2001:db8::/32`) which
+stdlib flags as private but isn't a real network.
+
+Tests: **9 new** in `tests/test_peer_unreachable.py` (was 0 in
+this file). Plugin test count is now **198** (was 189).
+
 ## [0.4.2] — 2026-10-04
 
 ### Added

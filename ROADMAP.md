@@ -465,9 +465,17 @@ SSR pages render a subtle `.transport-chip` next to the agent name
 pre-v0.4.1 entries (desktop_2, ai5080) keep working — they pick up
 the chip the next time they're re-submitted.
 
-### C. v0.4.1 — directory v2 transport fallback (low)
+### C. v0.4.1 — directory v2 transport fallback (low) — done in v0.4.3
 
 The current `a2a_call` / `a2a_discover` tools just HTTP the agent_card_url. If the URL is a MagicDNS name and the caller's machine isn't on the same tailnet, the call hangs (DNS resolves, but the IP is unreachable from the caller's network). Add a clear "peer unreachable" error that says "this agent is on a tailnet you don't have access to" instead of the generic HTTP timeout.
+
+**Shipped in v0.4.3:** new `_classify_peer_unreachable(peer_url, raw_result)` helper in `plugins/a2a_bridge/tools.py`. It mirrors the directory's `_is_private_or_loopbackHost` (Tailscale CGNAT `100.64/10` added manually because Python stdlib's `ipaddress` doesn't know about it) and substitutes a contextual error when:
+
+- `raw_result` looks like a network failure (`urlopen error`, `timed out`, `Connection refused`, `Connection reset`, `Name or service not known`, `No route to host`, `Network is unreachable`) AND
+- `peer_url` classifies as `tailscale-magicdns` or `lan` AND
+- `raw_result` does NOT look like an auth error (HTTP 401/403 / `rejected auth`)
+
+Wired into all 5 outbound call sites: `handle_send`, `handle_confirm`, `handle_introduce`, `handle_introduce_respond`, `handle_share_public`. `handle_receive_public` (inbound) is untouched. Public URLs pass through unchanged (the platform's error is fine for those). **9 new tests** in `tests/test_peer_unreachable.py`. Plugin test count: 189 → 198.
 
 ### D. v0.5 — directory v3 (Tailscale-native first-class)
 
@@ -492,7 +500,7 @@ The directory currently has one root, one KV namespace, and one `ROOT_SYSTEM_POL
 | Plugin e2e | 1 (skipped) | unchanged |
 | Directory (Node) | 55 | was 43; +12 from v0.4.1: 5 `classifyTransport`, 2 submit transport, 3 list filter, 1 render-agents chip, 1 existing test update |
 | Directory (Python) | 25 | was 12; +13 from v0.4.0 (12 `test_discover_tailscale.py` + 1 `test_make_submission_tailscale.py`). The 12 `policy_rotate.py` tests are at `directory/tests/test_policy_rotate.py` and run with the Node tests in CI. |
-| **Total** | **270** | (189 + 1 + 55 + 25) |
+| **Total** | **279** | (198 + 1 + 55 + 25) |
 
 ## What this document is NOT
 

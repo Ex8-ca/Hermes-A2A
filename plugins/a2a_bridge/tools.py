@@ -41,7 +41,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from plugins.a2a_bridge import approval, audit, identity, policy  # noqa: F401
 from plugins.a2a_bridge import handshake, keyring, meetings, slice as slice_mod  # noqa: F401
@@ -433,6 +433,119 @@ def _call_a2a_call(agent: str, message: str, context_id: str = "", timeout: int 
     return out if isinstance(out, str) else str(out)
 
 
+# v0.4.3 — peer-unreachable classifier.
+#
+# When the platform's a2a_call returns a string that looks like a network
+# failure (urllib error, timeout, connection refused, etc.) and the peer URL
+# is a Tailscale MagicDNS name or a private/LAN address, the generic
+# "Error: call to X failed — ..." message doesn't tell the operator what
+# they need to do. This helper substitutes a contextual message that names
+# the specific network requirement (same tailnet, same LAN/VPN, etc.).
+#
+# Public for testability; no side effects.
+
+_NETWORK_FAILURE_PATTERNS = (
+    "urlopen error",
+    "timed out",
+    "Connection refused",
+    "Connection reset",
+    "Name or service not known",
+    "No route to host",
+    "Network is unreachable",
+)
+
+
+def _is_private_or_loopback_url(peer_url: str) -> str:
+    """Classify a URL as 'tailscale-magicdns' / 'lan' / 'public'.
+
+    Mirrors the directory's _validate.js isPrivateOrLoopbackHost
+    (Tailscale ranges, RFC1918, link-local, IPv6 ULA, .ts.net suffix).
+
+    Returns one of:
+        "tailscale-magicdns" — host is *.ts.net
+        "lan"               — host is RFC1918/loopback/link-local/Tailscale IP
+        "public"            — anything else (or unparseable URL)
+    """
+    import ipaddress as _ip_address
+    from urllib.parse import urlparse as _urlparse
+    try:
+        parsed = _urlparse(peer_url)
+    except Exception:
+        return "public"
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return "public"
+    # Tailscale MagicDNS: e.g. ai5080.taila6e2e.ts.net
+    if host.endswith(".ts.net") or host == "ts.net":
+        return "tailscale-magicdns"
+    # Try to parse as an IP address.
+    try:
+        ip = _ip_address.ip_address(host)
+    except ValueError:
+        return "public"
+    if isinstance(ip, _ip_address.IPv4Address):
+        # Tailscale CGNAT: 100.64/10 (Python stdlib doesn't know about it).
+        if _ip_address.IPv4Address("100.64.0.0") <= ip <= _ip_address.IPv4Address("100.127.255.255"):
+            return "lan"
+        if ip.is_loopback or ip.is_link_local or ip.is_private or ip.is_unspecified:
+            return "lan"
+        return "public"
+    # IPv6
+    if ip.is_loopback or ip.is_link_local:
+        return "lan"
+    # ULA: fc00::/7 (covers fc00::/8 + fd00::/8). Python's is_private covers
+    # this range but also documentation ranges like 2001:db8::/32, so we
+    # exclude the documentation ranges first.
+    if _ip_address.IPv6Address("2001:db8::") <= ip <= _ip_address.IPv6Address("2001:db8:ffff:ffff:ffff:ffff:ffff:ffff"):
+        return "public"
+    if ip.is_private:
+        return "lan"
+    return "public"
+
+
+def _classify_peer_unreachable(peer_url: str, raw_result: str) -> Optional[str]:
+    """If raw_result looks like a network failure AND peer_url is on a
+    Tailscale or LAN transport, return a contextual error message that
+    tells the operator what to do. Otherwise return None and let the
+    caller pass raw_result through unchanged.
+
+    Network-failure patterns (substring match, any of these):
+      "urlopen error", "timed out", "Connection refused",
+      "Connection reset", "Name or service not known",
+      "No route to host", "Network is unreachable"
+
+    Auth errors (HTTP 401/403 / "rejected auth") are NOT overridden —
+    they have a different fix path and the platform's message is more
+    useful than ours.
+    """
+    if not raw_result or not peer_url:
+        return None
+    if "rejected auth" in raw_result or "HTTP 401" in raw_result or "HTTP 403" in raw_result:
+        return None
+    if not any(pat in raw_result for pat in _NETWORK_FAILURE_PATTERNS):
+        return None
+    transport = _is_private_or_loopback_url(peer_url)
+    if transport == "public":
+        return None
+    # Display the URL as the operator typed it (no normalization).
+    if transport == "tailscale-magicdns":
+        return (
+            f"Error: peer is on a Tailscale tailnet (URL: {peer_url}). "
+            "Your host is not on that tailnet, so the A2A call could not "
+            "reach it. Run `tailscale status` to check your tailnet membership, "
+            "or ask the peer operator to add your host to the tailnet's ACL. "
+            f"(Original error: {raw_result})"
+        )
+    # transport == "lan"
+    return (
+        f"Error: peer is on a private network (URL: {peer_url}; "
+        "RFC1918 / loopback / link-local / Tailscale CGNAT). Your host is "
+        "not on the same network, so the A2A call could not reach it. "
+        "Confirm your machine is on the same LAN, VPN, or Tailscale "
+        f"tailnet as the peer. (Original error: {raw_result})"
+    )
+
+
 def _call_a2a_history(context_id: str) -> str:
     if _PLUGIN_CTX is None:
         return (
@@ -487,6 +600,12 @@ def handle_send(args: Dict[str, Any], **_kw) -> str:
         context_id=(args.get("context_id") or "").strip(),
         timeout=int(args.get("timeout") or 0),
     )
+    # v0.4.3: surface a contextual "peer unreachable" error when the URL is
+    # a Tailscale MagicDNS name or a private/LAN address and the platform
+    # returned a generic network-error string.
+    classified = _classify_peer_unreachable(agent, reply)
+    if classified is not None:
+        reply = classified
     elapsed_ms = int((time.time() - t0) * 1000)
     return _format_reply(reply, elapsed_ms=elapsed_ms, label="send")
 
@@ -513,6 +632,11 @@ def handle_confirm(args: Dict[str, Any], **_kw) -> str:
         context_id=(args.get("context_id") or "").strip(),
         timeout=int(args.get("timeout") or 0),
     )
+    # v0.4.3: surface a contextual "peer unreachable" error when the URL is
+    # a Tailscale MagicDNS name or a private/LAN address.
+    classified = _classify_peer_unreachable(agent, reply)
+    if classified is not None:
+        reply = classified
     elapsed_ms = int((time.time() - t0) * 1000)
     header = f"✅ approved + sent in {elapsed_ms} ms"
     return f"{header}\n{_format_reply(reply, elapsed_ms=elapsed_ms, label='confirm')}"
@@ -661,6 +785,11 @@ def handle_introduce(args: Dict[str, Any], **_kw) -> str:
     if approval_request is not None:
         return approval_request.to_user_block()
     reply = _call_a2a_call(agent=peer_url, message=msg)
+    # v0.4.3: surface a contextual "peer unreachable" error when the URL is
+    # a Tailscale MagicDNS name or a private/LAN address.
+    classified = _classify_peer_unreachable(peer_url, reply)
+    if classified is not None:
+        reply = classified
     return (
         f"introduce sent to {peer_url}\n"
         f"  our agent_id:    {envelope['from']}\n"
@@ -735,6 +864,11 @@ def handle_introduce_respond(args: Dict[str, Any], **_kw) -> str:
     )
     msg = json.dumps({"envelope": ack, "type": "introduce_ack"})
     reply = _call_a2a_call(agent=verified["agent_card_url"], message=msg)
+    # v0.4.3: surface a contextual "peer unreachable" error when the URL is
+    # a Tailscale MagicDNS name or a private/LAN address.
+    classified = _classify_peer_unreachable(verified["agent_card_url"], reply)
+    if classified is not None:
+        reply = classified
 
     # Persist the meeting on our side.
     record = handshake.to_meeting_record(verified, our_url=_our_card_url(), our_granted_to_them=granted)
@@ -824,6 +958,11 @@ def handle_share_public(args: Dict[str, Any], **_kw) -> str:
     if approval_request is not None:
         return approval_request.to_user_block()
     reply = _call_a2a_call(agent=peer, message=msg)
+    # v0.4.3: surface a contextual "peer unreachable" error when the URL is
+    # a Tailscale MagicDNS name or a private/LAN address.
+    classified = _classify_peer_unreachable(peer, reply)
+    if classified is not None:
+        reply = classified
     return f"slice '{slice_name}' sent to {peer} (kind=memory_slice, level={slice_.level.value}); peer reply: {reply}"
 
 
