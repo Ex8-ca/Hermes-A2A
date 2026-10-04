@@ -424,10 +424,69 @@ independently roll-back-able.
 | Directory (Node) | 35 | unchanged from v0.2.0 |
 | Directory (Python) | 12 | new `test_policy_rotate.py` covers the operator-rotation CLI |
 
+## v0.3.x shipped (recap)
+
+v0.3.0–v0.3.3 are tagged and live. What's actually shipped vs. what was in the v0.3 plan above:
+
+- **v0.3.0** — replay protection (item 2), real slice fetching + envelope/meeting cross-check (items 1, 3, partially — fetch is done, cross-check is done), operator-rotation CLI (item 4).
+- **v0.3.1** — gateway-service wrapper bugfix (`scripts/install-gateway-service.sh` no longer blocks the systemd unit waiting for the gateway to exit; it `setsid`s the gateway, writes the PID, and exits).
+- **v0.3.2** — directory landing page redesign (chillygeek-faithful, dark theme, Inter, cyan→purple gradient on focal points, sticky header, 3-up agent card grid, terminal-style install block with v0.3.1).
+- **v0.3.3** — operator-signed deletion path (`/delete` Function + `delete_entry.py` CLI + 7 tests), plus reachability fix (`isPrivateOrLoopbackHost()` extended to Tailscale `100.64/10` + `*.ts.net`; `submit.js` skips the liveness probe for private hosts; falls back to GET on HEAD 405/501). Live catalog went from 7 entries (5 stale test artifacts + desktop_2 + parity_smoke) to **2 clean entries**: `desktop_2` (`.2`) and `ai5080` (`.3`).
+
+## v0.4 — Tailscale discoverability (in progress)
+
+**Scope:** the directory already accepts `*.ts.net` URLs (v0.3.3 reachability fix). What's missing is operator-side tooling so the operator doesn't hand-type the MagicDNS URL.
+
+**Plan:**
+
+1. `directory/operator/discover_tailscale.py` — `tailscale status --json` parser. CLI surface: `--self` (print local MagicDNS FQDN), `--peers` (list online peers), `--json` (full filtered status), `--refresh-cache` (write to `~/.hermes/.tailscale-cache.json`).
+2. `--auto-tailscale` flag on `make_submission.py` — calls `discover_tailscale.py --self` and builds `agent_card_url = http://<MagicDNS>:9900/.well-known/agent-card.json`. `--port` overrides the default. Operator still controls `--name` and `--agent-id`.
+3. README section "Tailscale discoverability" with the operator flow.
+4. Tests: ~12 Python tests for `discover_tailscale.py` (mocked subprocess) + 1 for `make_submission.py --auto-tailscale`.
+5. CHANGELOG + version bump to 0.4.0.
+
+**Manual step (user, after deploy):** re-submit `desktop_2` and `ai5080` with `--auto-tailscale` so the live entries point at the MagicDNS URLs (`http://minisforum-desktop.taila6e2e.ts.net:9900/...` and `http://ai5080.taila6e2e.ts.net:9900/...`). This is a separate decision because the v0.3.3 entries were the post-cleanup baseline; v0.4 is the operator-side tooling to *make* the migration easy.
+
+## v0.4+ — What's next (prioritized)
+
+### A. End-to-end live test (right after v0.4 ships)
+
+Run the full A2A round-trip between `.2` and `.3` over both the LAN (`192.168.1.x:9900`) and the tailnet (`*.ts.net:9900`) to confirm v0.3.0's protocol features (replay window, cross-check, real slice fetch) work end-to-end against the live pair. Document the result.
+
+### B. Directory v0.4.1 — schema additions (low)
+
+The `agent_card_url` field currently stores any URL. Add an optional `transport` field so a discoverer can see at-a-glance whether an entry is reachable over Tailscale (`transport: "tailscale-magicdns"`) vs LAN (`transport: "lan"`) vs public HTTPS (`transport: "https"`). Pure schema; no behavior change. The directory's per-agent SSR pages would render the transport as a tag chip.
+
+### C. v0.4.1 — directory v2 transport fallback (low)
+
+The current `a2a_call` / `a2a_discover` tools just HTTP the agent_card_url. If the URL is a MagicDNS name and the caller's machine isn't on the same tailnet, the call hangs (DNS resolves, but the IP is unreachable from the caller's network). Add a clear "peer unreachable" error that says "this agent is on a tailnet you don't have access to" instead of the generic HTTP timeout.
+
+### D. v0.5 — directory v3 (Tailscale-native first-class)
+
+The `tailscale` discovery is currently operator-side. v0.5 makes the directory Tailscale-aware at the protocol level: a discoverer running `tailscale status` locally can ask the directory "who on my tailnet speaks A2A?" without a separate submission step. This means the directory would need to validate `agent_card_url` against the operator's tailnet, or accept a Tailscale API key. Out of scope for v0.4; mentioned for completeness.
+
+### E. Per-agent SSR refresh on `/list` mutation (low)
+
+The per-agent pages (`pages/agent/<id>.html`) are rendered at build time by `render_agents.py`. The Cloudflare Function `pages/functions/agent/[id].js` reads from KV at request time. After a v0.3.3-style delete, the static HTML files for the deleted agents still exist on disk but the Function would 404 them. Cleanup: add a `--prune` flag to `render_agents.py` that deletes the static HTML for any agent_id not in the current catalog. Low priority because the stale files are dead code, not user-visible.
+
+### F. v0.4.x — multi-tailnet directory (v3)
+
+The directory currently has one root, one KV namespace, and one `ROOT_SYSTEM_POLICY` env var. A multi-tailnet directory would host multiple tailnets' worth of agents in a single KV namespace, partitioned by tailnet identifier. The directory's URL stays the same; the schema gains a `tailnet` field. Out of scope until someone asks for it.
+
+## Test counts at v0.4.0 (target)
+
+| Suite | Tests | Notes |
+|---|---|---|
+| Plugin unit | 201 | unchanged from v0.3.0 |
+| Plugin e2e | 1 (skipped) | unchanged |
+| Directory (Node) | 43 | +7 Tailscale cases in `validate.test.js` |
+| Directory (Python) | 25 | was 12; +12 `test_discover_tailscale.py` + 1 `test_make_submission_tailscale.py` |
+| **Total** | **270** | |
+
 ## What this document is NOT
 
 It's not a contract. Items here are ordered by the threat model
-they close, not by deadline. If a v0.3 user reports an issue
+they close, not by deadline. If a v0.4 user reports an issue
 that's not on this list, the list gets reordered; if an item here
 turns out to be unworkable, it gets dropped with a note in the
 CHANGELOG explaining why.
