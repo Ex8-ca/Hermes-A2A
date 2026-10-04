@@ -83,13 +83,28 @@ test("isPrivateOrLoopbackHost: IPv4 ranges", () => {
   assert.equal(isPrivateOrLoopbackHost("172.31.255.255"), true);
   assert.equal(isPrivateOrLoopbackHost("192.168.1.1"), true);
   assert.equal(isPrivateOrLoopbackHost("0.0.0.0"), true);
-  // public:
+  // Tailscale 100.64.0.0/10
+  assert.equal(isPrivateOrLoopbackHost("100.64.0.0"), true);
+  assert.equal(isPrivateOrLoopbackHost("100.88.26.20"), true);
+  assert.equal(isPrivateOrLoopbackHost("100.127.255.255"), true);
+
   assert.equal(isPrivateOrLoopbackHost("8.8.8.8"), false);
   assert.equal(isPrivateOrLoopbackHost("172.15.255.255"), false); // 172.15 is public
   assert.equal(isPrivateOrLoopbackHost("172.32.0.0"), false); // 172.32 is public
   assert.equal(isPrivateOrLoopbackHost("192.169.0.0"), false); // 192.169 is public
   assert.equal(isPrivateOrLoopbackHost("11.0.0.0"), false);
-  assert.equal(isPrivateOrLoopbackHost("100.64.0.1"), false); // CGNAT, not RFC1918
+  assert.equal(isPrivateOrLoopbackHost("100.63.255.255"), false); // just below Tailscale range
+  assert.equal(isPrivateOrLoopbackHost("100.128.0.0"), false); // just above
+});
+
+test("isPrivateOrLoopbackHost: Tailscale MagicDNS", () => {
+  assert.equal(isPrivateOrLoopbackHost("minisforum-desktop.taila6e2e.ts.net"), true);
+  assert.equal(isPrivateOrLoopbackHost("foo.ts.net"), true);
+  assert.equal(isPrivateOrLoopbackHost("Foo.TS.NET"), true); // case-insensitive
+  assert.equal(isPrivateOrLoopbackHost("ts.net"), true);
+  assert.equal(isPrivateOrLoopbackHost("notts.net"), false); // suffix must match
+  assert.equal(isPrivateOrLoopbackHost("foo.example.com"), false);
+  assert.equal(isPrivateOrLoopbackHost("foo.tailscale.us"), true);
 });
 
 test("isPrivateOrLoopbackHost: IPv6", () => {
@@ -98,7 +113,10 @@ test("isPrivateOrLoopbackHost: IPv6", () => {
   assert.equal(isPrivateOrLoopbackHost("fc00::1"), true);
   assert.equal(isPrivateOrLoopbackHost("fd00::1"), true); // ULA
   assert.equal(isPrivateOrLoopbackHost("fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"), true);
-  // public IPv6:
+  assert.equal(isPrivateOrLoopbackHost("fe80::1"), true); // link-local
+  assert.equal(isPrivateOrLoopbackHost("febf::1"), true); // still fe80::/10
+  assert.equal(isPrivateOrLoopbackHost("fec0::1"), false); // site-local (deprecated)
+
   assert.equal(isPrivateOrLoopbackHost("2001:db8::1"), false);
   assert.equal(isPrivateOrLoopbackHost("2606:4700:4700::1111"), false); // Cloudflare DNS
 });

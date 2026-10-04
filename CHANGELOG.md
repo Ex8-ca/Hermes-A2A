@@ -88,6 +88,39 @@ issues the user should know about BEFORE deploying:
    entries can be written by hand in the Cloudflare dashboard or
    via `wrangler kv key put` with the JSON body below.
 
+### Added post-review — directory reachability
+
+After the v0.3.3 cut, two real blockers surfaced during the live
+cleanup that needed the same fix:
+
+  * The A2A gateway (Python `BaseHTTPRequestHandler`) returns
+    `501 Unsupported Method ('HEAD')` for HEAD requests, so the
+    `/submit` liveness probe fails. `submit.js` now falls back to
+    GET on `405`/`501` responses. Real network errors still refuse
+    the submission.
+  * The directory runs on Cloudflare Pages, which cannot reach
+    private network ranges (RFC1918 LAN, `127.0.0.0/8`, `fe80::/10`)
+    or Tailscale (`100.64.0.0/10` CGNAT, `*.ts.net` MagicDNS).
+    `isPrivateOrLoopbackHost()` in `_validate.js` was extended to
+    include Tailscale's IP range and `*.ts.net` / `*.tailscale.us`
+    hostnames, and `submit.js` now skips the liveness probe for
+    any URL whose host is in these ranges — the operator is
+    responsible for the URL being correct, the directory is a
+    discovery layer (not a reachability oracle), and discoverers
+    do their own reachability check at call time.
+
+Tests: 7 new Tailscale cases in `directory/tests/validate.test.js`
+(IPv4 100.64/10 boundaries, MagicDNS suffix match + case
+insensitivity, IPv6 `fe80::/10` link-local). All 43 directory
+Node tests pass.
+
+Net effect on the live directory: 5 stale test entries removed
+(`agent_2f4b8e9d11a7c6a5`, `agent_83c2d59a6c821f7b`,
+`agent_parity_smoke_test`, `desktop_2_v2_selfsign_test`,
+`second_op_test`, `test_https`); the `desktop_2` entry's
+`agent_card_url` is now `http://192.168.1.2:9900/.well-known/agent-card.json`;
+and a new `ai5080` entry is live for `.3`.
+
 ## [0.3.2] — 2026-10-04
 
 ### Changed — Directory landing page

@@ -49,12 +49,20 @@ export function validateAgentCardUrl(url) {
 /**
  * True if the host is a loopback address or in an RFC1918 / RFC4193 private
  * range. IPv6 loopback (::1) and ULA (fc00::/7) are included; link-local
- * (fe80::/10) is included as a private network. Public hostnames return false.
+ * (fe80::/10) is included as a private network. Also matches the
+ * Tailscale 100.64.0.0/10 CGNAT range and *.ts.net MagicDNS hostnames.
+ * Public hostnames return false.
+ *
+ * "Unreachable from Cloudflare's edge" is the effective semantic: any
+ * URL the directory's Cloudflare Pages Functions cannot probe should
+ * be flagged here so the submitter skips the liveness check and the
+ * validator allows the URL through.
  *
  * Hostname forms handled: literal IPv4 ("192.168.1.2"), literal IPv6
- * ("[::1]", "[fc00::1]"), and DNS names (resolved as a string check; we do
- * NOT do DNS lookups here, so DNS names like "agent.lan" are NOT auto-allowed —
- * the caller is expected to pass an IP literal for private networks).
+ * ("[::1]", "[fc00::1]"), and DNS names (resolved as a string check;
+ * we do NOT do DNS lookups here, so DNS names that happen to be
+ * private are not auto-allowed unless the suffix matches a known
+ * private zone like .ts.net).
  *
  * @param {string} host
  * @returns {boolean}
@@ -68,15 +76,26 @@ export function isPrivateOrLoopbackHost(host) {
     ? host.slice(1, -1)
     : host;
 
+  // Tailscale MagicDNS: any *.ts.net (or *.beta.tailscale.net etc.)
+  // is a private, non-internet-routable name. Cloudflare's edge
+  // can't reach these. Match on the suffix before doing any IP
+  // parsing so DNS hostnames are caught.
+  const lower = h.toLowerCase();
+  if (lower.endsWith(".ts.net") || lower === "ts.net") return true;
+  if (lower.endsWith(".tailscale.us") || lower === "tailscale.us") return true;
+
   // IPv6 loopback
   if (h === "::1") return true;
 
-  // IPv6 ULA: fc00::/7 (fc00-fdff)
+  // IPv6 ULA: fc00::/7 (fc00-fdff) and link-local fe80::/10
   if (h.includes(":")) {
-    // quick first-hextet check
     const first = h.split(":")[0].toLowerCase().padStart(4, "0");
     const head = parseInt(first.slice(0, 2), 16);
-    if ((head & 0xfe) === 0xfc) return true; // fc00-fdff
+    if ((head & 0xfe) === 0xfc) return true; // fc00-fdff (ULA)
+    if (head === 0xfe && (parseInt(first.slice(2, 4), 16) & 0xc0) === 0x80) {
+      // fe80::/10 (link-local)
+      return true;
+    }
     return false;
   }
 
@@ -100,6 +119,9 @@ export function isPrivateOrLoopbackHost(host) {
   if (a === 172 && b >= 16 && b <= 31) return true;
   // 192.168.0.0/16
   if (a === 192 && b === 168) return true;
+  // 100.64.0.0/10 — Tailscale (and CGNAT in general; the operator
+  // tailnet is in this range)
+  if (a === 100 && b >= 64 && b <= 127) return true;
   // 0.0.0.0 (unspecified)
   if (a === 0 && octets.every((n) => n === 0)) return true;
 

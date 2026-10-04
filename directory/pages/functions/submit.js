@@ -6,7 +6,7 @@
 //
 // Wire format: see directory/worker/README.md for the signed-envelope schema.
 
-import { validateAgentCardUrl } from "./_validate.js";
+import { validateAgentCardUrl, isPrivateOrLoopbackHost } from "./_validate.js";
 import { canonicalize } from "./canonicalize.js";
 
 // v1: hardcoded single-operator allowlist.
@@ -44,6 +44,18 @@ function loadRootSystemPolicy(env) {
 
 const ALG = { name: "Ed25519", namedCurve: "Ed25519" };
 const KV_BINDING = "AGENTS";
+
+function isPrivateOrLoopbackUrl(url) {
+  // Thin URL-wrapping shim over the host-level helper in _validate.js.
+  // Keeps the URL parsing in one place and lets us add new private
+  // ranges (e.g. *.ts.net) by editing one function.
+  try {
+    const u = new URL(url);
+    return isPrivateOrLoopbackHost(u.hostname);
+  } catch {
+    return false;
+  }
+}
 
 function jsonResponse(status, body, extraHeaders = {}) {
   return new Response(JSON.stringify(body, null, 2), {
@@ -217,14 +229,45 @@ async function handleSubmit(request, env) {
   }
 
   let headOk = false;
-  try {
-    const head = await fetch(body.agent_card_url, { method: "HEAD", redirect: "follow" });
-    headOk = head.ok;
-  } catch {
-    headOk = false;
+  let headStatus = 0;
+  // URLs that point at private network ranges (RFC1918, Tailscale
+  // 100.64.0.0/10, link-local, loopback) and Tailscale MagicDNS
+  // hostnames (*.ts.net) cannot be probed by the directory's
+  // Cloudflare Pages Functions — Cloudflare's edge is not on the
+  // operator's private network. Skip the liveness check for these
+  // URLs; the operator is responsible for the URL being correct.
+  // The directory is a discovery layer, not a reachability oracle
+  // — discoverers do their own reachability check when they call.
+  if (isPrivateOrLoopbackUrl(body.agent_card_url)) {
+    headOk = true;
+  } else {
+    try {
+      const head = await fetch(body.agent_card_url, { method: "HEAD", redirect: "follow" });
+      headOk = head.ok;
+      headStatus = head.status;
+    } catch {
+      headOk = false;
+    }
+    if (!headOk) {
+      // HEAD liveness probe failed. Some HTTP servers (e.g. Python's
+      // BaseHTTPRequestHandler) return 501 Unsupported Method ('HEAD')
+      // without implementing HEAD. Fall back to GET: a 2xx on GET is
+      // just as good a proof that the agent_card_url resolves. We
+      // only fall back when HEAD explicitly returned a "method not
+      // allowed" status (405/501) — actual network errors still
+      // refuse the submission.
+      if (headStatus === 405 || headStatus === 501) {
+        try {
+          const get = await fetch(body.agent_card_url, { method: "GET", redirect: "follow" });
+          headOk = get.ok;
+        } catch {
+          headOk = false;
+        }
+      }
+    }
   }
   if (!headOk) {
-    return bad(400, `agent_card_url ${body.agent_card_url} did not respond 200 to HEAD`);
+    return bad(400, `agent_card_url ${body.agent_card_url} did not respond 2xx to HEAD or GET`);
   }
 
   const entry = {
