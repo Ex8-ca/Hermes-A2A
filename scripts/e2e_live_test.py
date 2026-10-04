@@ -192,22 +192,50 @@ def main() -> int:
         agents = [a.get("agent_id") for a in data.get("agents", [])]
         if count != 2 or "desktop_2" not in agents or "ai5080" not in agents:
             return False, f"expected 2 entries (desktop_2, ai5080), got count={count} agents={agents}"
-        return True, f"count={count}, agents={agents}"
+        # v0.4.1: each entry should have a transport field. Both live
+        # entries are on MagicDNS URLs so both should be "tailscale-magicdns".
+        transports = {a["agent_id"]: a.get("transport") for a in data["agents"]}
+        if not all(t == "tailscale-magicdns" for t in transports.values()):
+            return False, f"transport field missing or wrong: {transports}"
+        return True, f"count={count}, agents={agents}, transports={set(transports.values())}"
 
-    if not check("5. directory /list has 2 clean entries", check_directory_list):
+    if not check("5. directory /list has 2 clean entries with transport", check_directory_list):
         failures += 1
 
-    # 6. per-agent SSR pages
-    def check_ssr(url: str) -> tuple[bool, str]:
+    # 5b. directory /list?transport=tailscale-magicdns (v0.4.1 filter)
+    def check_directory_filter() -> tuple[bool, str]:
+        data = json.loads(_http_get(DIRECTORY_LIST + "?transport=tailscale-magicdns"))
+        count = data.get("count", 0)
+        if count != 2:
+            return False, f"expected 2 entries, got count={count}"
+        # And the inverse: ?transport=https should be 0 (no public-HTTPS entries)
+        data_https = json.loads(_http_get(DIRECTORY_LIST + "?transport=https"))
+        if data_https.get("count", -1) != 0:
+            return False, f"?transport=https should be 0, got {data_https.get('count')}"
+        return True, f"?transport=tailscale-magicdns={count}, ?transport=https=0"
+
+    if not check("5b. directory /list?transport= filter (v0.4.1)", check_directory_filter):
+        failures += 1
+
+    # 6. per-agent SSR pages (also checks for the transport chip — v0.4.1)
+    def check_ssr(url: str, expected_transport: str) -> tuple[bool, str]:
         try:
             body = _http_get(url)
-            return True, f"{len(body)} bytes"
+            text = body.decode("utf-8", errors="replace")
         except Exception as e:
             return False, f"{type(e).__name__}: {e}"
+        chip_class = f"transport-{expected_transport}"
+        if chip_class not in text:
+            return False, f"missing transport chip class '{chip_class}'"
+        if 'class="transport-chip' not in text:
+            return False, "transport-chip element not present"
+        return True, f"{len(body)} bytes, transport chip present"
 
-    if not check("6. /agent/desktop_2 SSR page", lambda: check_ssr(DIRECTORY_AGENT_2)):
+    if not check("6. /agent/desktop_2 SSR page + transport chip",
+                 lambda: check_ssr(DIRECTORY_AGENT_2, "tailscale-magicdns")):
         failures += 1
-    if not check("6. /agent/ai5080 SSR page", lambda: check_ssr(DIRECTORY_AGENT_3)):
+    if not check("6. /agent/ai5080 SSR page + transport chip",
+                 lambda: check_ssr(DIRECTORY_AGENT_3, "tailscale-magicdns")):
         failures += 1
 
     # 7. discover_tailscale.py works
