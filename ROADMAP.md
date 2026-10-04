@@ -473,23 +473,26 @@ The current `a2a_call` / `a2a_discover` tools just HTTP the agent_card_url. If t
 
 The `tailscale` discovery is currently operator-side. v0.5 makes the directory Tailscale-aware at the protocol level: a discoverer running `tailscale status` locally can ask the directory "who on my tailnet speaks A2A?" without a separate submission step. This means the directory would need to validate `agent_card_url` against the operator's tailnet, or accept a Tailscale API key. Out of scope for v0.4; mentioned for completeness.
 
-### E. Per-agent SSR refresh on `/list` mutation (low)
+### E. Per-agent SSR refresh on `/list` mutation (low) — done in v0.4.2
 
-The per-agent pages (`pages/agent/<id>.html`) are rendered at build time by `render_agents.py`. The Cloudflare Function `pages/functions/agent/[id].js` reads from KV at request time. After a v0.3.3-style delete, the static HTML files for the deleted agents still exist on disk but the Function would 404 them. Cleanup: add a `--prune` flag to `render_agents.py` that deletes the static HTML for any agent_id not in the current catalog. Low priority because the stale files are dead code, not user-visible.
+`render_agents.py --prune` ships in v0.4.2. Idempotent: running
+it again is a no-op. The v0.3.3 cleanup left 5 stale HTMLs on
+disk; the release removes them and ships the new flag to
+prevent future drift.
 
 ### F. v0.4.x — multi-tailnet directory (v3)
 
 The directory currently has one root, one KV namespace, and one `ROOT_SYSTEM_POLICY` env var. A multi-tailnet directory would host multiple tailnets' worth of agents in a single KV namespace, partitioned by tailnet identifier. The directory's URL stays the same; the schema gains a `tailnet` field. Out of scope until someone asks for it.
 
-## Test counts at v0.4.0 (target)
+## Test counts at v0.4.2 (current)
 
 | Suite | Tests | Notes |
 |---|---|---|
-| Plugin unit | 189 | unchanged from v0.3.0 (the "201" in earlier notes was a release-quote that didn't match the actual collection) |
+| Plugin unit | 189 | unchanged from v0.3.0 (the "201" in v0.3.0 release notes was a release-quote that didn't match the actual collection; v0.3.4's `pythonpath = ["."]` fix didn't change the count) |
 | Plugin e2e | 1 (skipped) | unchanged |
-| Directory (Node) | 43 | +7 Tailscale cases in `validate.test.js` |
-| Directory (Python) | 25 | was 12; +12 `test_discover_tailscale.py` + 1 `test_make_submission_tailscale.py` |
-| **Total** | **258** | |
+| Directory (Node) | 55 | was 43; +12 from v0.4.1: 5 `classifyTransport`, 2 submit transport, 3 list filter, 1 render-agents chip, 1 existing test update |
+| Directory (Python) | 25 | was 12; +13 from v0.4.0 (12 `test_discover_tailscale.py` + 1 `test_make_submission_tailscale.py`). The 12 `policy_rotate.py` tests are at `directory/tests/test_policy_rotate.py` and run with the Node tests in CI. |
+| **Total** | **270** | (189 + 1 + 55 + 25) |
 
 ## What this document is NOT
 
