@@ -41,3 +41,13 @@ venv/
 .wrangler/
 wrangler.jsonc
 wrangler.toml.bak
+
+# Operator-local state files (mode 0600, contain private keys
+# and audit history; never share these).
+directory/operator/.deletion-audit.log
+directory/operator/.tailscale-cache.json
+directory/operator/*.key
+directory/operator/*.pem
+
+# uv's lockfile for the plugin's CLI; we don't track it.
+uv.lock
